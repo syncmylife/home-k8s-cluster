@@ -1,5 +1,5 @@
 
-# Target: Kubernetes on Ubuntu LTS with microk8s using Longhorn for persistent storage. v20230626
+# Target: Kubernetes on Ubuntu LTS with microk8s using Longhorn for persistent storage. v20250112
 ### [#k8s #ubuntuLTS #microk8s #helm #metallb #cert-manager #longhorn #ingress #letsencrypt #rancher #dashboard #reflector #longhorn #gitea #nextcloud #rsync #jupyterhub #lms #rabbitmq  #smartmontools #smartd #influxdb #grafana #nodered #home-assistant #docker]
 
 ## FAQ:
@@ -21,7 +21,7 @@
 ## Hardware
 
 ### main node (location 1)
-- MIKROTIK RB4011iGS + 5HacQ2HnD-IN
+- MIKROTIK RB5009UG+S+IN
 - Desktop PC with Ryzen 5600g, 64GB RAM, 1TB SSD, 14TB HDD(crypted lvm)
 ### secondary node (location 2)
 - MIKROTIK RBD52G-5HacD2HnD-TC
@@ -36,7 +36,7 @@
   git.example.cloud 192.168.210.222 \
   example.cloud 192.168.210.200 \
   .+\.example\.cloud 192.168.210.200
-* both nodes are running Ubuntu 22.04 LTS with microk8s 1.25/stable and user cuser
+* both nodes are running Ubuntu 24.04 LTS with microk8s 1.31/stable and user cuser
 
 ## Installing extra packages
 
@@ -69,7 +69,7 @@ cuser@amber:~$ sudo vim /etc/hosts
 * add this lines to /etc/hosts:
 
 ```console
-127.0.0.1 amber.example.cloud
+127.0.1.1 amber.example.cloud
 192.168.101.235 vg.example.cloud
 ```
 
@@ -89,11 +89,11 @@ cuser@vg:~$ sudo vim /etc/hosts
 * add this lines to /etc/hosts:
 
 ```console
-127.0.0.1 vg.example.cloud
+127.0.1.1 vg.example.cloud
 192.168.210.10 amber.example.cloud
 ```
 
-* on the mikrotik router allow static requests(do not forget the firewall rules forbidding port 53 TCP and UDP from WAN) this way:
+* on both of the mikrotik router allow remote requests(do not forget the firewall rules forbidding port 53 TCP and UDP from WAN) this way:
 ```console
 name: example.cloud to 192.168.210.200
 regexp: .+\.example\.cloud to 192.168.210.200
@@ -109,6 +109,9 @@ cuser@vg:~$ sudo resolvectl flush-caches
 ipconfig /flushdns
 ```
 * try dig example.cloud .. if the response contains the public IP then then DNS is not set to the router
+
+* verifying that DNS is working correctly within your Kubernetes platform: https://help.hcl-software.com/connections/v6/admin/install/cp_prereq_kubernetes_dns.html
+
 * if connected over eth:
 ```console
 cuser@amber:~$ sudo vim 00-installer-config.yaml
@@ -210,9 +213,10 @@ cuser@vg:~$ sudo apt update && sudo apt upgrade -y
 * I don't have a ~/.ssh folder, so:
 ```console
 cuser@amber:~$ cd ~
-cuser@amber:~$ ssh-keygen {replace-this-with-your-passphraze}
+cuser@amber:~$ ssh-keygen
 ```
-
+* when asked provide a {replace-this-with-your-passphraze}
+ 
 ```console
 cuser@vg:~$ cd ~
 cuser@vg:~$ ssh-keygen {replace-this-with-your-passphraze}
@@ -291,6 +295,15 @@ cuser@vg:~$ sudo vim /etc/fstab
 cuser@vg:~$ sudo mount -a
 ```
 
+* install cryptsetup and dmsetup:
+```console
+cuser@vg:~$ sudo apt-get install cryptsetup
+cuser@vg:~$ sudo apt-get install dmsetup
+
+cuser@amber:~$ sudo apt-get install cryptsetup
+cuser@amber:~$ sudo apt-get install dmsetup
+```
+
 ## Mounting crypted HDDs(version for secondary node with 2 crypted HDD's)
 ```console
 cuser@vg:~$ cat /proc/partitions
@@ -299,7 +312,6 @@ UUID="67e52429-1daa-4c96-95f7-716f0193826e" TYPE="crypto_LUKS"
 cuser@vg:~$ sudo blkid /dev/sdc
 UUID="e9834bd0-e366-46fa-80e5-7db71bc01908" TYPE="crypto_LUKS"
 ```
-
 * create mount-fileserver-data.sh script somewhere:
 
 ```console
@@ -331,7 +343,7 @@ mount /dev/vg1/lv_data /mnt/6tb
 ```console
 cuser@amber:~$ sudo apt update
 cuser@amber:~$ sudo apt install snapd
-cuser@amber:~$ sudo snap install microk8s --classic --channel=latest/stable
+cuser@amber:~$ sudo snap install microk8s --classic --channel=1.31/stable
 ```
 ## Connecting nodes
 * on the main node:
@@ -340,23 +352,62 @@ cuser@amber:~$ microk8s add-node
 ```
 * copy the join command from the output of the add-node command, its sth. like:
 ```console
-microk8s join 192.168.x.x:25000/73d4fs456452656vh6fdbv7vsda8bg52/6d7fj6456j94
+microk8s join 192.168.x.x:25000/73d4fs456452656vh6fdbv7vsda8bg52/6d7fj6456j94 --worker
 ```
 
 and run it:
 ```console
-cuser@vg:~$ microk8s join 192.168.x.x:25000/73d4fs456452656vh6fdbv7vsda8bg52/6d7fj6456j94
+cuser@vg:~$ microk8s join 192.168.x.x:25000/73d4fs456452656vh6fdbv7vsda8bg52/6d7fj6456j94 --worker
 cuser@amber:~$ microk8s kubectl get no
 ```
+* (when worker successfully joined the master, but 
+```console
+kubectl get nodes
+```
+is not returning the worker then the part with --worker was missing) 
+* when something went wrong its easy possible to debug and remove the whole microk8s:
+```console
+cuser@amber:~$ journalctl -u snap.microk8s.daemon-kubelite.service -n 1000
+cuser@amber:~$ sudo  rm -rf /usr/local/bin/kubectl
+cuser@amber:~$ sudo snap remove --purge microk8s
+cuser@amber:~$ sudo rm -rf /var/lib/snapd/cache/*
+cuser@amber:~$ sudo rm -rf ~/.kube/*
+```
+
+* sometimes the microk8s is stopped and throws an error(and not on every command when the problem is not on the master):
+Get "https://127.0.0.1:16443/version": dial tcp 127.0.0.1:16443: connect: connection refused
+or
+The connection to the server 127.0.0.1:16443 was refused - did you specify the right host or port?
+
+```console
+cuser@vg:~$ microk8s.status
+cuser@vg:~$ microk8s.start
+cuser@vg:~$ microk8s.status
+```
+
 ## Configure microk8s, enable hostpath-storage, dns
 * call with the right admin user(cuser)
 ```console
 cuser@amber:~$ sudo usermod -a -G microk8s $USER
 cuser@amber:~$ sudo chown -f -R $USER ~/.kube
 cuser@amber:~$ newgrp microk8s
+```
 
-cuser@amber:~$ sudo snap refresh microk8s --channel=latest/stable
+* check the channel info and change to the desired channel:
+```console
+cuser@amber:~$ snap info microk8s
 
+cuser@amber:~$ sudo snap refresh microk8s --channel=1.31/stable
+```
+
+* to debug microk8s use:
+```console
+cuser@amber:~$ journalctl -u snap.microk8s.daemon-kubelite.service -n 1000
+```
+
+* change the config:
+
+```console
 cuser@amber:~$ mkdir -p ~/.kube
 cuser@amber:~$ microk8s kubectl config view --raw >~/.kube/config
 cuser@amber:~$ chmod 600 ~/.kube/config
@@ -379,6 +430,11 @@ cuser@amber:~$ sudo microk8s disable helm
 cuser@amber:~$ sudo snap install helm --classic
 ```
 
+* uninstalling helm if needed:
+```console
+cuser@amber:~$ helm uninstall cert-manager -n cert-manager
+```
+
 ## Install cert-manager
 * latest version is under: https://github.com/cert-manager/cert-manager/releases
 * you can use https://github.com/cert-manager/cert-manager/releases/latest to list the latest stable tag (here v1.11.1)
@@ -391,8 +447,8 @@ cuser@amber:~$ helm install \
 cert-manager jetstack/cert-manager \
 --namespace cert-manager \
 --create-namespace \
---version v1.11.1 \
---set installCRDs=true \
+--version v1.16.0 \
+--set crds.enabled=true \
 --set 'extraArgs={--dns01-recursive-nameservers-only,--dns01-recursive-nameservers=8.8.8.8:53\,1.1.1.1:53}'
 ```
 * check for running pods:
@@ -411,7 +467,8 @@ cuser@amber:~$ helm repo update
 	
 cuser@amber:~$ helm install metallb metallb/metallb \
 --namespace metallb-system \
---version 0.13.7
+--create-namespace \
+--version 0.14.8
 
 cuser@amber:~$ cat <<EOF | kubectl apply -f -
 apiVersion: metallb.io/v1beta1
@@ -464,7 +521,7 @@ cuser@amber:~$ kubectl delete deployment nginx
 cuser@amber:~$ kubectl delete svc nginx
 ```
 
-* You need to make sure that the source IP address (external-ip assigned by metallb) is preserved. To achieve this, set the value of the externalTrafficPolicy field of the ingress-controller Service spec to Local.
+* You need to make sure that the source IP address (external-ip assigned by metallb) is preserved. To achieve this, set the value of the externalTrafficPolicy field of the ingress-controller Service spec to Local. At this point is ingress not installed, so please take a look on the ingress part.
 
 ```console
 cuser@amber:~$ kubectl edit svc ingress-nginx-controller -n ingress-nginx
@@ -493,6 +550,7 @@ cuser@amber:~$ microk8s enable metallb:192.168.210.200-192.168.210.254
 ## Install Let's Encrypt 
 * https://homekube.org/docs/cert-manager.html
 * https://cert-manager.io/docs/configuration/acme/dns01/acme-dns/
+* https://knowledge.digicert.com/solution/configure-cert-manager-and-digicert-acme-service-with-kubernetes
 ```console
 cuser@amber:~$ sudo apt-get install jq -y
 cuser@amber:~$ cd ~/
@@ -550,7 +608,7 @@ cuser@amber:~$ cat acme-dns-amber.json
 * (for multiple domains please read: https://cert-manager.io/docs/configuration/acme/dns01/acme-dns/) 
 * create a secret in the cert-manager namespace(we have this because cert-manager was already installed):
 ```console
-cuser@amber:~$ kubectl create secret generic acme-dns-amber -n cert-manager --from-file acme-dns-amber.json
+cuser@amber:~$ kubectl create secret generic acme-dns-amber -n cert-manager-acme-secrets --from-file acme-dns-amber.json
 ```
 * wait(few minutes) until cname is propagated: dig _acme-challenge.example.cloud 
 * (Requesting a certificate is accomplished by creating an instance of Certificate)
@@ -610,11 +668,27 @@ EOF
 * we can check the clusterissuer with:
 ```console
 cuser@amber:~$ kubectl describe clusterissuer letsencrypt-staging
-cuser@amber:~$ kubectl describe secret example-tls-staging -n cert-manager-acme-secrets
+```
+
+* Once the ACME account is registered check the certificate request status:
+```console
+cuser@amber:~$ kubectl describe certificaterequest -n cert-manager-acme-secrets
+```
+
+* To check the certificate status:
+```console
+cuser@amber:~$ kubectl describe certificate -n cert-manager-acme-secrets
+```
+
+```console
+cuser@amber:~$ kubectl get secrets -n cert-manager-acme-secrets --watch
+cuser@amber:~$ kubectl describe secret example-tls-staging-12345 -n cert-manager-acme-secrets
 ```
 ->The important part here is that both tls.crt and tls.key must be present and not empty. This may take a while until the tls.crt is present and its size is > 0 !.
 
 * **NOW THE PROD VERSION**(replaced acme server endpoint and staging by prod):
+
+* suitable name for the new namespaces cert-manager-acme-secrets would be also something containing the domain, for example cert-manager-example-cloud
 
 ```console
 $ cat <<EOF | kubectl apply -f -
@@ -672,7 +746,7 @@ EOF
 * we can check the clusterissuer with:
 ```console
 cuser@amber:~$ kubectl describe clusterissuer letsencrypt-prod
-cuser@amber:~$ kubectl describe secret example-tls-prod -n cert-manager-acme-secrets
+cuser@amber:~$ kubectl describe secret example-tls-prod-12345 -n cert-manager-acme-secrets
 ```
 -> tls key and crt should have a size > 0
 
@@ -728,7 +802,7 @@ controller:
 * install ingress
 ```console
 cuser@amber:~$ helm install ingress-nginx ingress-nginx/ingress-nginx -f ingress-helm-values.yaml \
---version 4.3.0 \
+--version 4.11.2 \
 --namespace ingress-nginx \
 --set controller.extraArgs.default-ssl-certificate="ingress-nginx/example-tls-prod" \
 --set controller.service.loadBalancerIP=192.168.210.200
@@ -754,7 +828,7 @@ cuser@amber:~$ helm repo add rancher-stable https://releases.rancher.com/server-
 cuser@amber:~$ helm repo update
 
 cuser@amber:~$ helm install rancher rancher-stable/rancher \
---version 2.7.3 \
+--version 2.9.2 \
 --namespace cattle-system \
 --create-namespace \
 --set global.cattle.psp.enabled=false \
@@ -844,7 +918,7 @@ cuser@amber:~$ kubectl -n kube-system describe secret $(kubectl -n kube-system g
 cuser@amber:~$ helm repo add emberstack https://emberstack.github.io/helm-charts
 cuser@amber:~$ helm repo update
 cuser@amber:~$ helm install reflector emberstack/reflector \
---version 6.1.47 \
+--version 7.1.288 \
 --namespace reflector \
 --create-namespace
 ```
@@ -880,6 +954,11 @@ cuser@vg:~$ sudo mkfs.ext4 /dev/ubuntu-vg/ssd
 cuser@vg:~$ sudo mkdir /mnt/ssd
 cuser@vg:~$ sudo blkid
 cuser@vg:~$ sudo vim /etc/fstab
+```
+
+* add entry to fstab:
+```console
+/dev/disk/by-id/dm-uuid-LVM-JLKtipf6uNcwEXfTT9ZMkwhylkFs77MCl0RQqJO6PVC41rJWn6JADDmxTWyBqqQJ /mnt/ssd ext4 defaults 0 1
 ```
 
 * take a look at https://longhorn.io/kb/troubleshooting-volume-with-multipath/
@@ -924,17 +1003,24 @@ cuser@amber:~$ sudo apt-get install nfs-common
 cuser@amber:~$ kubectl delete --all pods --namespace=longhorn-system
 ```
 	
-* check for requirements: https://longhorn.io/docs/1.4.1/deploy/install/#installation-requirements
+* check for requirements: https://longhorn.io/docs/1.7.1/deploy/install/#installation-requirements
 
 ```console
-cuser@amber:~$ curl -sSfL https://raw.githubusercontent.com/longhorn/longhorn/v1.4.1/scripts/environment_check.sh | bash
+cuser@amber:~$ curl -sSfL https://raw.githubusercontent.com/longhorn/longhorn/v1.7.1/scripts/environment_check.sh | bash
 
-cuser@amber:~$ kubectl -n longhorn-system apply -f https://raw.githubusercontent.com/longhorn/longhorn/v1.4.1/deploy/prerequisite/longhorn-iscsi-installation.yaml
+cuser@amber:~$ kubectl apply -f https://raw.githubusercontent.com/longhorn/longhorn/v1.7.1/deploy/prerequisite/longhorn-iscsi-installation.yaml
 cuser@amber:~$ kubectl -n longhorn-system get pod | grep longhorn-iscsi-installation
-cuser@amber:~$ kubectl -n longhorn-system apply -f https://raw.githubusercontent.com/longhorn/longhorn/v1.4.1/deploy/prerequisite/longhorn-nfs-installation.yaml
+cuser@amber:~$ kubectl apply -f https://raw.githubusercontent.com/longhorn/longhorn/v1.7.1/deploy/prerequisite/longhorn-nfs-installation.yaml
 cuser@amber:~$ kubectl -n longhorn-system get pod | grep longhorn-nfs-installation
 cuser@amber:~$ kubectl -n longhorn-system logs longhorn-nfs-installation-hz647 -c nfs-installation
 cuser@amber:~$ kubectl -n longhorn-system logs longhorn-iscsi-installation-tzq8x -c nfs-installation
+```
+
+* how to uninstall if needed: 
+```console
+cuser@amber:~$ kubectl delete -f https://raw.githubusercontent.com/longhorn/longhorn/v1.7.1/deploy/prerequisite/longhorn-iscsi-installation.yaml
+cuser@amber:~$ kubectl delete -f https://raw.githubusercontent.com/longhorn/longhorn/v1.7.1/deploy/prerequisite/longhorn-nfs-installation.yaml
+```
 
 cuser@amber:~$ helm install longhorn longhorn/longhorn \
 --namespace longhorn-system \
@@ -942,7 +1028,7 @@ cuser@amber:~$ helm install longhorn longhorn/longhorn \
 --set defaultSettings.defaultDataPath="/mnt/ssd" \
 --set csi.kubeletRootDir=/var/snap/microk8s/common/var/lib/kubelet \
 --set persistence.defaultClassReplicaCount=2 \
---version 1.4.1
+--version 1.7.1
 
 cuser@amber:~$ kubectl -n longhorn-system get pod
 ```
@@ -1034,6 +1120,7 @@ cuser@amber:~$ kubectl get storageclass
 
 * howto degragated: https://github.com/longhorn/longhorn/issues/2067
 * when I had problems it was dns: https://longhorn.io/kb/troubleshooting-dns-resolution-failed/
+* how to debug dns: https://help.hcl-software.com/connections/v6/admin/install/cp_prereq_kubernetes_dns.html
 
 ## Install gitea 
 * Optional: (this example is working with https, ingress is not able to forward ssh ports, if needed then a new LoadBalancer is required - on port 22 with annotation: metallb.universe.tf/allow-shared-ip: "{{ ndo_context }}")
@@ -1848,12 +1935,12 @@ cuser@amber:~$ sudo chmod +x /usr/local/bin/docker-compose
 ```console
 cuser@amber:~$ kubectl get nodes
 cuser@amber:~$ microk8s kubectl drain amber.example.cloud --ignore-daemonsets
-cuser@amber:~$ sudo snap refresh microk8s --channel=1.25/stable
+cuser@amber:~$ sudo snap refresh microk8s --channel=1.31/stable
 cuser@amber:~$ microk8s kubectl get po -A -o wide
 cuser@amber:~$ microk8s.kubectl get no
 cuser@amber:~$ microk8s kubectl uncordon amber.example.cloud
 cuser@amber:~$ microk8s kubectl uncordon vg.example.cloud
 
 cuser@amber:~$ do-release-upgrade
-cuser@amber:~$ sudo snap refresh microk8s --channel=1.25/stable
+cuser@amber:~$ sudo snap refresh microk8s --channel=1.31/stable
 ```
