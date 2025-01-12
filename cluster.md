@@ -1929,6 +1929,7 @@ cuser@amber:~$ sudo systemctl status docker
 cuser@amber:~$ sudo apt-get install docker-compose
 cuser@amber:~$ sudo chmod +x /usr/local/bin/docker-compose
 ```
+
 ## Updating system
 * think about every helm-chart compatibility!
 
