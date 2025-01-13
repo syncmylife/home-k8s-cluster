@@ -29,14 +29,14 @@
 
 ## Network
 * both nodes are connected using wireguard 
-* node1 has the hostname amber.example.cloud LAN IP 192.168.201.10 and node2 vg.example.cloud 192.168.101.235
+* node1 has the hostname amber.<example.cloud> LAN IP 192.168.201.10 and node2 vg.<example.cloud> 192.168.101.235
 * both nodes have in router defined primary DNS 8.8.8.8 but with static DNS entries: \
-  amber.example.cloud 192.168.210.10 \
-  vg.example.cloud 192.168.101.235 \
-  git.example.cloud 192.168.210.222 \
-  example.cloud 192.168.210.200 \
-  .+\.example\.cloud 192.168.210.200
-* both nodes are running Ubuntu 24.04 LTS with microk8s 1.31/stable and user cuser
+  amber.<example.cloud> 192.168.210.10 \
+  vg.<example.cloud> 192.168.101.235 \
+  git.<example.cloud> 192.168.210.222 \
+  <example.cloud> 192.168.210.200 \
+  .+\.<example>\.<cloud> 192.168.210.200
+* both nodes are running Ubuntu 24.04 LTS with microk8s 1.32/stable and user cuser
 
 ## Installing extra packages
 
@@ -57,7 +57,7 @@ cuser@vg:~$ ifconfig
 
 ```console
 cuser@amber:~$ sudo vim /etc/hostname
-amber.example.cloud
+amber.<example.cloud>
 
 cuser@amber:~$ sudo reboot
 ```
@@ -69,15 +69,15 @@ cuser@amber:~$ sudo vim /etc/hosts
 * add this lines to /etc/hosts:
 
 ```console
-127.0.1.1 amber.example.cloud
-192.168.101.235 vg.example.cloud
+127.0.1.1 amber.<example.cloud>
+192.168.101.235 vg.<example.cloud>
 ```
 
 * now the same for the other node:
 
 ```console
 cuser@vg:~$ sudo vim /etc/hostname
-vg.example.cloud
+vg.<example.cloud>
 
 cuser@vg:~$ sudo reboot
 ```
@@ -89,14 +89,14 @@ cuser@vg:~$ sudo vim /etc/hosts
 * add this lines to /etc/hosts:
 
 ```console
-127.0.1.1 vg.example.cloud
-192.168.210.10 amber.example.cloud
+127.0.1.1 vg.<example.cloud>
+192.168.210.10 amber.<example.cloud>
 ```
 
 * on both of the mikrotik router allow remote requests(do not forget the firewall rules forbidding port 53 TCP and UDP from WAN) this way:
 ```console
-name: example.cloud to 192.168.210.200
-regexp: .+\.example\.cloud to 192.168.210.200
+name: <example.cloud> to 192.168.210.200
+regexp: .+\.<example>\.<cloud> to 192.168.210.200
 ```
 * flush DNS on mikrotik
 * flush DNS on ubuntu:
@@ -108,99 +108,36 @@ cuser@vg:~$ sudo resolvectl flush-caches
 ```console
 ipconfig /flushdns
 ```
-* try dig example.cloud .. if the response contains the public IP then then DNS is not set to the router
+* try cuser@amber:~$ dig <example.cloud> .. if the response contains the public IP then then DNS is not set to the router
 
 * verifying that DNS is working correctly within your Kubernetes platform: https://help.hcl-software.com/connections/v6/admin/install/cp_prereq_kubernetes_dns.html
 
-* if connected over eth:
+## Configure DNS with systemd-resolved
+
+* check if resolv.conf is a symlink to /run/systemd/resolve/stub-resolv.conf:
 ```console
-cuser@amber:~$ sudo vim 00-installer-config.yaml
-network:
-ethernets:
-  enp3s0:
-    dhcp4: true
-    nameservers:
-      addresses: [192.168.210.1]
-version: 2
-```
-```console
-cuser@amber:~$ sudo netplan apply
-```
-* when connecting over wifi then we need to configure wifi:
-```console
-cuser@amber:~$ sudo vim /etc/netplan/00-installer-config-wifi.yaml
+cuser@amber:~$ ls -l /etc/resolv.conf
+cuser@vg:~$ ls -l /etc/resolv.conf
 ```
 
-* add this lines to /etc/netplan/00-installer-config-wifi.yaml:
+* change the /etc/systemd/resolved.conf for both nodes:
+$ sudo vim /etc/systemd/resolved.conf
+DNS=8.8.8.8 1.1.1.1
+FallbackDNS=8.8.4.4
 
-```console
-      nameservers:
-            addresses: [192.168.210.1]
-```
-```console
-cuser@amber:~$ sudo netplan apply
-```
-
-## Configure DHCP with resolvconf
-```console
-cuser@amber:~$ sudo apt install resolvconf
-cuser@amber:~$ sudo vim /etc/resolvconf/resolv.conf.d/head
-nameserver 192.168.210.1
-```
-
-```console
-cuser@amber:~$ sudo resolvconf --enable-updates
-cuser@amber:~$ sudo resolvconf -u
-```
-
-```console
-cuser@amber:~$ cat /etc/resolv.conf
-192.168.210.1
-```
-
-
-```console
-cuser@vg:~$ sudo apt install resolvconf
-cuser@vg:~$ sudo vim /etc/resolvconf/resolv.conf.d/head
-nameserver 192.168.101.1
-```
-
-```console
-cuser@vg:~$ sudo resolvconf --enable-updates
-cuser@vg:~$ sudo resolvconf -u
-```
-
-```console
-cuser@vg:~$ cat /etc/resolv.conf
-192.168.101.1
-```
-
--> now dig example.cloud from both nodes should answer with 192.168.210.200
-
-## Optional - configure DHCP with systemd-resolved
-
-```console
-cuser@amber:~$ sudo vim /etc/systemd/resolved.conf
-DNS=192.168.210.1
-FallbackDNS=8.8.8.8
-```
-
+* restart to apply the configuration:
 ```console
 cuser@amber:~$ sudo service systemd-resolved restart
-```
-
-```console
-cuser@vg:~$ sudo vim /etc/systemd/resolved.conf
-DNS=192.168.101.1
-FallbackDNS=8.8.8.8
-```
-
-```console
 cuser@vg:~$ sudo service systemd-resolved restart
 ```
 
-## Update system(for all nodes)
-   
+* check the current output for DNS:
+```console
+cuser@amber:~$ resolvectl
+cuser@vg:~$ resolvectl
+```
+
+## Update system packages(for all nodes)
 ```console
 cuser@amber:~$ sudo apt update && sudo apt upgrade -y
 ```
@@ -224,16 +161,16 @@ cuser@vg:~$ ssh-keygen {replace-this-with-your-passphraze}
 
 * then from the primary server(the IP/hostname is the secondary server):
 ```console
-cuser@amber:~$ ssh-copy-id cuser@vg.example.cloud
+cuser@amber:~$ ssh-copy-id cuser@vg.<example.cloud>
 ```
 
 * provide the passphraze and test with:
 ```console
-cuser@amber:~$ ssh 'cuser@vg.example.cloud'
+cuser@amber:~$ ssh 'cuser@vg.<example.cloud>'
 ```
 
 ```console
-cuser@vg:~$ ssh 'cuser@amber.example.cloud'
+cuser@vg:~$ ssh 'cuser@amber.<example.cloud>'
 ```
 
 * do not forget that my firewall has a default rule to drop connections coming from 192.168.101.0 so modify this
@@ -415,10 +352,10 @@ cuser@amber:~$ chmod 600 ~/.kube/config
 cuser@amber:~$ sudo snap alias microk8s.kubectl kubectl
 	
 cuser@amber:~$ kubectl get nodes -o wide --show-labels
-cuser@amber:~$ kubectl label nodes amber.example.cloud kubernetes.io/role=master
-cuser@amber:~$ kubectl label nodes amber.example.cloud disktype=ssd
-cuser@amber:~$ kubectl label nodes vg.example.cloud disktype=ssd
-cuser@amber:~$ kubectl label nodes amber.example.cloud storagetype=fileserver
+cuser@amber:~$ kubectl label nodes amber.<example.cloud> kubernetes.io/role=master
+cuser@amber:~$ kubectl label nodes amber.<example.cloud> disktype=ssd
+cuser@amber:~$ kubectl label nodes vg.<example.cloud> disktype=ssd
+cuser@amber:~$ kubectl label nodes amber.<example.cloud> storagetype=fileserver
 
 cuser@amber:~$ sudo microk8s enable hostpath-storage dns
 ```
@@ -447,7 +384,7 @@ cuser@amber:~$ helm install \
 cert-manager jetstack/cert-manager \
 --namespace cert-manager \
 --create-namespace \
---version v1.16.0 \
+--version v1.16.2 \
 --set crds.enabled=true \
 --set 'extraArgs={--dns01-recursive-nameservers-only,--dns01-recursive-nameservers=8.8.8.8:53\,1.1.1.1:53}'
 ```
@@ -468,7 +405,7 @@ cuser@amber:~$ helm repo update
 cuser@amber:~$ helm install metallb metallb/metallb \
 --namespace metallb-system \
 --create-namespace \
---version 0.14.8
+--version 0.14.9
 
 cuser@amber:~$ cat <<EOF | kubectl apply -f -
 apiVersion: metallb.io/v1beta1
@@ -533,15 +470,6 @@ cuser@amber:~$ kubectl edit svc ingress-nginx-controller -n ingress-nginx
 externalTrafficPolicy: Local
 ```
 
-* upgrading metallb:
-
-```console
-cuser@amber:~$ helm upgrade metallb metallb/metallb \
---namespace metallb-system \
---reuse-values
-
-cuser@amber:~$ helm list --all-namespaces
-```
 * optional: install with microk8s instead of helm(disadvantage is not separating namespaces):
 ```console
 cuser@amber:~$ microk8s enable metallb:192.168.210.200-192.168.210.254
@@ -567,35 +495,40 @@ cuser@amber:~$ vim ~/acme-dns.json
 }
 ```
 
-* the domain we bought is example.cloud
+* the domain we bought is <example.cloud>
 * we take the value for the key "fulldomain" - for example: "r2120c32-20a2-3c7d-4f01-34fe4ttb3899.auth.acme-dns.io"
 * we take the value and terminate it with a dot: r2120c32-20a2-3c7d-4f01-34fe4ttb3899.auth.acme-dns.io.
 * we go to our hosting provider(for example exohosting.sk) and
-* if existing A entry *.example.cloud then delete this entry and then we create a new cname entry there:
+* if existing A entry *.<example.cloud> then delete this entry and then we create a new cname entry there:
 ```console
-name: _acme-challenge.example.cloud
+name: _acme-challenge.<example.cloud>
 value: r2120c32-20a2-3c7d-4f01-34fe4ttb3899.auth.acme-dns.io.
 ```
 
-* (full output: _acme-challenge.example.cloud   IN CNAME	r2120c32-20a2-3c7d-4f01-34fe4ttb3899.auth.acme-dns.io.)
-* (what we do not delete is example.cloud. type A targeting the IP {replace-this-with-your-public-ip})
+* (full output: _acme-challenge.<example.cloud>   IN CNAME	r2120c32-20a2-3c7d-4f01-34fe4ttb3899.auth.acme-dns.io.)
+* (what we do not delete is <example.cloud>. type A targeting the IP {replace-this-with-your-public-ip})
 * we check if it works:
 ```console
-cuser@amber:~$ dig @8.8.8.8 _acme-challenge.example.cloud
+cuser@amber:~$ dig _acme-challenge.<example.cloud>
+```
+* (output containing this should come: _acme-challenge.<example.cloud>. 3600 IN    CNAME   r2120c32-20a2-3c7d-4f01-34fe4ttb3899.auth.acme-dns.io.)
+
+* if there was a problem we check with 8.8.8.8 directly:
+```console
+cuser@amber:~$ dig @8.8.8.8 _acme-challenge.<example.cloud>
 ```
 
-* (output containing this should come: _acme-challenge.example.cloud. 3600 IN    CNAME   r2120c32-20a2-3c7d-4f01-34fe4ttb3899.auth.acme-dns.io.)
 * create a new json file acme-dns-amber.json (using saved acme-dns.json) with this command(replace domain with yours):
 
 ```console
-cuser@amber:~$ jq -n --arg domain "example.cloud" --argjson acme "$(cat ~/acme-dns.json)" '.+={($domain): $acme}' > ~/acme-dns-amber.json
+cuser@amber:~$ jq -n --arg domain "<example.cloud>" --argjson acme "$(cat ~/acme-dns.json)" '.+={($domain): $acme}' > ~/acme-dns-amber.json
 ```
 
 * check if the file content is ok:
 ```console
 cuser@amber:~$ cat acme-dns-amber.json
 {
-  "example.cloud": {
+  "<example.cloud>": {
     "username": "3e482c71-6eb7-4ac3-a761-82b0a97ec036",
     "password": "xP198CaYwgLMPH5c48on2F8-f1iZVf_dPJvMpnQ-",
     "fulldomain": "r2120c32-20a2-3c7d-4f01-34fe4ttb3899.auth.acme-dns.io",
@@ -608,29 +541,29 @@ cuser@amber:~$ cat acme-dns-amber.json
 * (for multiple domains please read: https://cert-manager.io/docs/configuration/acme/dns01/acme-dns/) 
 * create a secret in the cert-manager namespace(we have this because cert-manager was already installed):
 ```console
-cuser@amber:~$ kubectl create secret generic acme-dns-amber -n cert-manager-acme-secrets --from-file acme-dns-amber.json
+cuser@amber:~$ kubectl create secret generic acme-dns-amber -n cert-manager-<example-cloud> --from-file acme-dns-amber.json
 ```
-* wait(few minutes) until cname is propagated: dig _acme-challenge.example.cloud 
+* wait(few minutes) until cname is propagated: dig _acme-challenge.<example.cloud>
 * (Requesting a certificate is accomplished by creating an instance of Certificate)
 ```console
 cuser@amber:~$ cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: cert-manager-acme-secrets
+  name: cert-manager-<example-cloud>
 
 ---
 
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: example-certificate-staging
-  namespace: cert-manager-acme-secrets
+  name: <example>-certificate-staging
+  namespace: cert-manager-<example-cloud>
 spec:
   dnsNames:
-    - 'example.cloud'
-    - '*.example.cloud'
-  secretName: example-tls-staging
+    - '<example.cloud>'
+    - '*.<example.cloud>'
+  secretName: <example>-tls-staging
   issuerRef:
     name: letsencrypt-staging
     kind: ClusterIssuer
@@ -660,7 +593,7 @@ spec:
               key: acme-dns-amber.json
         selector:
           dnsZones:
-            - 'example.cloud'
+            - '<example.cloud>'
 EOF
 ```
 
@@ -672,43 +605,46 @@ cuser@amber:~$ kubectl describe clusterissuer letsencrypt-staging
 
 * Once the ACME account is registered check the certificate request status:
 ```console
-cuser@amber:~$ kubectl describe certificaterequest -n cert-manager-acme-secrets
+cuser@amber:~$ kubectl describe certificaterequest -n cert-manager-<example-cloud>
 ```
 
 * To check the certificate status:
 ```console
-cuser@amber:~$ kubectl describe certificate -n cert-manager-acme-secrets
+cuser@amber:~$ kubectl describe certificate -n cert-manager-<example-cloud>
 ```
 
 ```console
-cuser@amber:~$ kubectl get secrets -n cert-manager-acme-secrets --watch
-cuser@amber:~$ kubectl describe secret example-tls-staging-12345 -n cert-manager-acme-secrets
+cuser@amber:~$ kubectl get secrets -n cert-manager-<example-cloud> --watch
+cuser@amber:~$ kubectl describe secret <example>-tls-staging-12345 -n cert-manager-<example-cloud>
 ```
 ->The important part here is that both tls.crt and tls.key must be present and not empty. This may take a while until the tls.crt is present and its size is > 0 !.
 
 * **NOW THE PROD VERSION**(replaced acme server endpoint and staging by prod):
 
-* suitable name for the new namespaces cert-manager-acme-secrets would be also something containing the domain, for example cert-manager-example-cloud
+* check if the cert-manager secret is there:
+```console
+cuser@amber:~$ kubectl describe secret acme-dns-amber -n cert-manager
+```
 
 ```console
 $ cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: cert-manager-acme-secrets
+  name: cert-manager-<example-cloud>
 
 ---
 
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: example-certificate-prod
-  namespace: cert-manager-acme-secrets
+  name: <example>-certificate-prod
+  namespace: cert-manager-<example-cloud>
 spec:
   dnsNames:
-    - 'example.cloud'
-    - '*.example.cloud'
-  secretName: example-tls-prod
+    - '<example.cloud>'
+    - '*.<example.cloud>'
+  secretName: <example>-tls-prod
   issuerRef:
     name: letsencrypt-prod
     kind: ClusterIssuer
@@ -738,7 +674,7 @@ spec:
               key: acme-dns-amber.json
         selector:
           dnsZones:
-            - 'example.cloud
+            - '<example.cloud>'
 EOF
 ```
 
@@ -746,9 +682,21 @@ EOF
 * we can check the clusterissuer with:
 ```console
 cuser@amber:~$ kubectl describe clusterissuer letsencrypt-prod
-cuser@amber:~$ kubectl describe secret example-tls-prod-12345 -n cert-manager-acme-secrets
+cuser@amber:~$ kubectl describe secret <example>-tls-prod-12345 -n cert-manager-<example-cloud>
 ```
 -> tls key and crt should have a size > 0
+
+* for uninstall:
+```console
+cuser@amber:~$ kubectl delete secret acme-dns-amber -n cert-manager
+cuser@amber:~$ kubectl delete certificate <example>-certificate-staging -n cert-manager-<example-cloud>
+cuser@amber:~$ kubectl delete clusterIssuer letsencrypt-staging
+cuser@amber:~$ kubectl delete certificate <example>-certificate-prod -n cert-manager-<example-cloud>
+cuser@amber:~$ kubectl delete clusterIssuer letsencrypt-prod
+cuser@amber:~$ kubectl get Issuers,ClusterIssuers,Certificates,CertificateRequests,Orders,Challenges --all-namespaces
+cuser@amber:~$ helm uninstall --namespace cert-manager cert-manager
+cuser@amber:~$ kubectl delete namespace cert-manager
+```
 
 ## Install ingress
 Internet -> LoadBalancer ->  Ingress -> service
@@ -771,12 +719,12 @@ cuser@amber:~$ microk8s disable ingress
 cuser@amber:~$ helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
 cuser@amber:~$ helm repo update
 cuser@amber:~$ kubectl create namespace ingress-nginx
-cuser@amber:~$ kubectl edit certificate example-certificate-staging -n cert-manager-acme-secrets
 ```
-
+* for next steps install reflector first(or make the changes after reflector is installed):
 * add the ingress-nginx under secretTemplate reflector.v1.k8s.emberstack.com/reflection-allowed-namespaces
 ```console
-cuser@amber:~$ kubectl edit certificate example-certificate-prod -n cert-manager-acme-secrets
+cuser@amber:~$ kubectl edit certificate <example>-certificate-staging -n cert-manager-<example-cloud>
+cuser@amber:~$ kubectl edit certificate <example>-certificate-prod -n cert-manager-<example-cloud>
 ```
 * add the ingress-nginx under secretTemplate reflector.v1.k8s.emberstack.com/reflection-allowed-namespaces
 ```console
@@ -802,9 +750,9 @@ controller:
 * install ingress
 ```console
 cuser@amber:~$ helm install ingress-nginx ingress-nginx/ingress-nginx -f ingress-helm-values.yaml \
---version 4.11.2 \
+--version 4.12.0 \
 --namespace ingress-nginx \
---set controller.extraArgs.default-ssl-certificate="ingress-nginx/example-tls-prod" \
+--set controller.extraArgs.default-ssl-certificate="ingress-nginx/<example>-tls-prod" \
 --set controller.service.loadBalancerIP=192.168.210.200
 
 cuser@amber:~$ kubectl get pods -n ingress-nginx
@@ -832,7 +780,7 @@ cuser@amber:~$ helm install rancher rancher-stable/rancher \
 --namespace cattle-system \
 --create-namespace \
 --set global.cattle.psp.enabled=false \
---set hostname=rancher.example.cloud \
+--set hostname=rancher.<example.cloud> \
 --set replicas=1 \
 --set bootstrapPassword=Changeme123
 
@@ -846,7 +794,7 @@ cuser@amber:~$ kubectl edit ingress rancher -n cattle-system
 ```console
   ingressClassName: nginx
   rules:
-  - host: rancher.example.cloud
+  - host: rancher.<example.cloud>
     http:
       paths:
         - path: /
@@ -858,7 +806,7 @@ cuser@amber:~$ kubectl edit ingress rancher -n cattle-system
                 number: 80
 ```
 
-* change the secret to example-tls-prod
+* change the secret to <example>-tls-prod
 * check for running pods:
 ```console
 cuser@amber:~$ kubectl get pods --namespace cattle-system
@@ -891,7 +839,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-  - host: dashboard.example.cloud
+  - host: dashboard.<example.cloud>
     http:
       paths:
         - path: /
@@ -909,7 +857,7 @@ cuser@amber:~$ kubectl -n kube-system describe secret $(kubectl -n kube-system g
 ```
 * open the browser, go to dashboard, chose radio button token,
 * copy the token value and paste it into form then click sign in. You’ll be able to login with admin permission.
-* navigate to https://dashboard.example.cloud/
+* navigate to https://dashboard.<example.cloud>/
 
 ## Install reflector
 * firstly check if all namespaces are present
@@ -925,15 +873,15 @@ cuser@amber:~$ helm install reflector emberstack/reflector \
 * as described here: https://cert-manager.io/docs/tutorials/syncing-secrets-across-namespaces/ add secretTemplate under spec:
 * you can read more about reflector: https://github.com/emberstack/kubernetes-reflector/blob/main/README.md
 ```console
-cuser@amber:~$ kubectl edit certificate example-certificate-staging -n cert-manager-acme-secrets
-cuser@amber:~$ kubectl edit certificate example-certificate-prod -n cert-manager-acme-secrets
+cuser@amber:~$ kubectl edit certificate <example>-certificate-staging -n cert-manager-<example-cloud>
+cuser@amber:~$ kubectl edit certificate <example>-certificate-prod -n cert-manager-<example-cloud>
 ```
 
 ```console
   secretTemplate:
     annotations:
       reflector.v1.k8s.emberstack.com/reflection-allowed: "true"
-      reflector.v1.k8s.emberstack.com/reflection-allowed-namespaces: "cattle-system,in:gress-nginx,kube-system,longhorn-system,gitea,nextcloud,jupyterhub,lms,mqtt,node-red,home-assistant,influxdb,grafana"  # Control destination namespaces
+      reflector.v1.k8s.emberstack.com/reflection-allowed-namespaces: "cattle-system,ingress-nginx,kube-system,longhorn-system,gitea,nextcloud,jupyterhub,lms,mqtt,node-red,home-assistant,influxdb,grafana"  # Control destination namespaces
       reflector.v1.k8s.emberstack.com/reflection-auto-enabled: "true" # Auto create reflection for matching namespaces
       reflector.v1.k8s.emberstack.com/reflection-auto-namespaces: "cattle-system,ingress-nginx,kube-system,longhorn-system,gitea,nextcloud,jupyterhub,lms,mqtt,node-red,home-assistant,influxdb,grafana" # Control auto-reflection namespaces
 ```
@@ -1061,7 +1009,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-  - host: longhorn.example.cloud
+  - host: longhorn.<example.cloud>
     http:
       paths:
       - path: /
@@ -1073,8 +1021,8 @@ spec:
               number: 80
   tls:
   - hosts:
-    - longhorn.example.cloud
-    secretName: example-tls-prod
+    - longhorn.<example.cloud>
+    secretName: <example>-tls-prod
 EOF
 ```
 
@@ -1106,7 +1054,7 @@ EOF
 ```console
 cuser@amber:~$ kubectl -n longhorn-system get ingress
 ```
--> from the output we know the hostname: longhorn.example.cloud
+-> from the output we know the hostname: longhorn.<example.cloud>
 
 * in the UI change the storage class name to longhorn-fast
 * and under Node->Operation->Edit node and discs->add tag ssd for both disk and node
@@ -1144,7 +1092,7 @@ EOF
 ```console
 cuser@amber:~$ cat values-gitea.yml
 gitea:
-  clusterDomain: gitea.example.cloud
+  clusterDomain: gitea.<example.cloud>
   admin:
     existingSecret: gitea-admin-secret
 
@@ -1160,14 +1108,14 @@ ingress:
   enabled: true
   className: nginx
   hosts:
-    - host: gitea.example.cloud
+    - host: gitea.<example.cloud>
       paths:
         - path: /
           pathType: Prefix
   tls:
-   - secretName: example-tls-prod
+   - secretName: <example>-tls-prod
      hosts:
-       - gitea.example.cloud
+       - gitea.<example.cloud>
 
 cuser@amber:~$ helm install --version 8.3.0 --namespace gitea gitea gitea-charts/gitea --values values-gitea.yml
 cuser@amber:~$ kubectl get pods -n gitea
@@ -1246,11 +1194,11 @@ ingress:
   path: /
   pathType: Prefix
   tls:
-   - secretName: example-tls-prod
+   - secretName: <example>-tls-prod
      hosts:
-       - nextcloud.example.cloud
+       - nextcloud.<example.cloud>
 nextcloud:
-  host: nextcloud.example.cloud
+  host: nextcloud.<example.cloud>
   username: {replace-this-with-your-username-for-nextcloud}
   password: {replace-this-with-your-password-for-nextcloud}
   extraVolumes:
@@ -1322,7 +1270,7 @@ $ sudo groupadd -g 33 www-data
 $ sudo useradd www-data -u 33 -g 33 -m -s /bin/false
 ```
 
-* go to nextcloud.example.cloud and under Apps add External storage
+* go to nextcloud.<example.cloud> and under Apps add External storage
 * go to User and Add group fileserver
 * go to User->Active users, click edit and add group fileserver, then go to Settings->Administration->External storage and add nextcloud as Local with Configuration /external-data and for fileserver group
 
@@ -1356,13 +1304,13 @@ cuser@vg:~$ sudo chmod -R u=rwx,g=rx+s,o=rx /nextcloud
 ```
 
 ```console
-cuser@amber:~$ rsync -arvz -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" --progress --delete /nextcloud/ {replace-this-with-your-system-username}@vg.example.cloud:/nextcloud/
+cuser@amber:~$ rsync -arvz -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" --progress --delete /nextcloud/ {replace-this-with-your-system-username}@vg.<example.cloud>:/nextcloud/
 ```
 
 * to create a patch to usb
 ```console
 cuser@amber:~$ cd /media/usb
-cuser@amber:~$ sudo rsync -arv --only-write-batch=patch /nextcloud/ {replace-this-with-your-system-username}@vg.example.cloud:/nextcloud/
+cuser@amber:~$ sudo rsync -arv --only-write-batch=patch /nextcloud/ {replace-this-with-your-system-username}@vg.<example.cloud>:/nextcloud/
 ```
 
 * to apply it
@@ -1396,14 +1344,14 @@ tls_starttls off
 tls_trust_file /etc/ssl/certs/ca-certificates.crt
 logfile /var/log/msmtp.log
 
-account example.cloud
+account <example.cloud>
 host    {replace-this-with-your-smtp-host}
 port    {replace-this-with-your-smtp-port}
-from    info@example.cloud
-user    info@example.cloud
+from    info@<example.cloud>
+user    info@<example.cloud>
 password {replace-this-with-your-smtp-password}
 
-account default: example.cloud
+account default: <example.cloud>
 ```
 
 * install mailutils:
@@ -1428,17 +1376,17 @@ set sendmail="/usr/bin/msmtp -t"
 
 * test 1:
 ```console
-cuser@amber:~$ echo "Hello World" | msmtp -d info@example.cloud
+cuser@amber:~$ echo "Hello World" | msmtp -d info@<example.cloud>
 ```
 
 * test 2:
 ```console
-cuser@amber:~$ echo -e "Subject: This is a Test" | sendmail info@example.cloud -F servers-hostname
+cuser@amber:~$ echo -e "Subject: This is a Test" | sendmail info@<example.cloud> -F servers-hostname
 ```
 
 * test 3:
 ```console
-cuser@amber:~$ echo "Testing msmtp from ${HOSTNAME} with mail command" | mail -s "hi there" info@example.cloud
+cuser@amber:~$ echo "Testing msmtp from ${HOSTNAME} with mail command" | mail -s "hi there" info@<example.cloud>
 ```
 
 * Install smartmontools
@@ -1453,7 +1401,7 @@ start_smartd=yes
 
 * test it: comment out the DEVICESCAN line in /etc/smartd.conf and add:
 ```console
-/dev/sda -a -m info@example.cloud -M test
+/dev/sda -a -m info@<example.cloud> -M test
 ```
 * then test it:
 ```console
@@ -1461,7 +1409,7 @@ cuser@amber:~$ sudo systemctl restart smartd
 ```
 * if works then change it to(min 35, max 55Celsia):
 ```console
-DEVICESCAN -H -l error -l selftest -f -o on -s (O/../../5/11|L/../../5/13|C/../../5/15) -W 4,35,55 -d removable -m info@example.cloud -n standby -M exec /usr/share/smartmontools/smartd-runner
+DEVICESCAN -H -l error -l selftest -f -o on -s (O/../../5/11|L/../../5/13|C/../../5/15) -W 4,35,55 -d removable -m info@<example.cloud> -n standby -M exec /usr/share/smartmontools/smartd-runner
 ```
 
 ## Install jupyterhub
@@ -1503,17 +1451,17 @@ ingress:
   enabled: true
   ingressClassName: nginx
   hosts:
-   - jupyterhub.example.cloud
+   - jupyterhub.<example.cloud>
   tls:
-   - secretName: example-tls-prod
+   - secretName: <example>-tls-prod
      hosts:
-       - jupyterhub.example.cloud
+       - jupyterhub.<example.cloud>
 ```
 * install jupyterhub:
 ```console
 cuser@amber:~$ helm install --version 2.0.0 --namespace jupyterhub jupyterhub jupyterhub/jupyterhub --values values-jupyterhub2.yml
 ```
-* wait for all pods and then navigate to jupyterhub.example.cloud and login using {replace-this-with-your-jupyter-user} and {replace-this-with-your-jupyter-password}
+* wait for all pods and then navigate to jupyterhub.<example.cloud> and login using {replace-this-with-your-jupyter-user} and {replace-this-with-your-jupyter-password}
 * install pandoc and tex inside the user pod(jupyter-{replace-this-with-your-jupyter-user})
 ```console
 cuser@amber:~$ kubectl -n jupyterhub exec --stdin --tty jupyter-{replace-this-with-your-jupyter-user} -- /bin/bash
@@ -1543,7 +1491,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-  - host: lms.example.cloud
+  - host: lms.<example.cloud>
     http:
       paths:
       - path: /
@@ -1555,8 +1503,8 @@ spec:
               number: 9000
   tls:
   - hosts:
-    - lms.example.cloud
-    secretName: example-tls-prod
+    - lms.<example.cloud>
+    secretName: <example>-tls-prod
 EOF
 ```
 
@@ -1587,13 +1535,13 @@ extraConfiguration: |-
     mqtt.allow_anonymous = false
 ingress:
   enabled: true
-  hostname: rabbitmq.example.cloud
+  hostname: rabbitmq.<example.cloud>
   tls: true
   ingressClassName: nginx
   extraTls:
-    - secretName: example-tls-prod
+    - secretName: <example>-tls-prod
       hosts:
-        - rabbitmq.example.cloud
+        - rabbitmq.<example.cloud>
 persistence:
   enabled: true
   storageClass: longhorn-fast
@@ -1659,7 +1607,7 @@ cuser@amber:~$ helm install rabbitmq bitnami/rabbitmq --version 11.14.4  --names
   ]
 }
 ```
-* from the graphical interface under rabbitmq.example.cloud choose a json with the content above and click on upload button to merge the new definitions
+* from the graphical interface under rabbitmq.<example.cloud> choose a json with the content above and click on upload button to merge the new definitions
 ```console
 cuser@amber:~$ kubectl get pods --show-labels -n mqtt
 cuser@amber:~$ kubectl get pod --selector="app.kubernetes.io/name=rabbitmq" -n mqtt
@@ -1706,17 +1654,17 @@ cuser@amber:~$ kubectl create namespace node-red
 cuser@amber:~$ cat values-influxdb.yaml
 ```
 ```console
-clusterDomain: example.cloud
+clusterDomain: <example.cloud>
 global:
   storageClass: longhorn-fast
 ingress:
   enabled: true
-  hostname: influxdb.example.cloud
+  hostname: influxdb.<example.cloud>
   ingressClassName: nginx
   extraTls:
-    - secretName: example-tls-prod
+    - secretName: <example>-tls-prod
       hosts:
-        - influxdb.example.cloud
+        - influxdb.<example.cloud>
 persistence:
   storageClass: longhorn-fast
 ```
@@ -1775,11 +1723,11 @@ ingress:
   enabled: true
   ingressClassName: nginx
   hosts:
-    - grafana.example.cloud
+    - grafana.<example.cloud>
   tls:
-   - secretName: example-tls-prod
+   - secretName: <example>-tls-prod
      hosts:
-       - grafana.example.cloud
+       - grafana.<example.cloud>
 persistence:
   enabled: true
   storageClassName: longhorn-fast
@@ -1808,14 +1756,14 @@ ingress:
   enabled: true
   className: nginx
   hosts:
-    - host: node-red.example.cloud
+    - host: node-red.<example.cloud>
       paths:
         - path: /
           pathType: Prefix
   tls:
-   - secretName: example-tls-prod
+   - secretName: <example>-tls-prod
      hosts:
-       - node-red.example.cloud
+       - node-red.<example.cloud>
 	 certificate:
 	   enabled: false
 ```
@@ -1867,14 +1815,14 @@ ingress:
       nginx.org/websocket-services: home-assistant
     ingressClassName: nginx
     hosts:
-      - host: home-assistant.example.cloud
+      - host: home-assistant.<example.cloud>
         paths:
           - path: /
             pathType: Prefix
     tls:
-      - secretName: example-tls-prod
+      - secretName: <example>-tls-prod
         hosts:
-          - home-assistant.example.cloud
+          - home-assistant.<example.cloud>
 
 persistence:
   config:
@@ -1930,18 +1878,73 @@ cuser@amber:~$ sudo apt-get install docker-compose
 cuser@amber:~$ sudo chmod +x /usr/local/bin/docker-compose
 ```
 
-## Updating system
-* think about every helm-chart compatibility!
+## Update whole system(for all nodes)
+```console
+cuser@amber:~$ sudo apt update && sudo apt upgrade -y
+```
 
 ```console
-cuser@amber:~$ kubectl get nodes
-cuser@amber:~$ microk8s kubectl drain amber.example.cloud --ignore-daemonsets
-cuser@amber:~$ sudo snap refresh microk8s --channel=1.31/stable
-cuser@amber:~$ microk8s kubectl get po -A -o wide
-cuser@amber:~$ microk8s.kubectl get no
-cuser@amber:~$ microk8s kubectl uncordon amber.example.cloud
-cuser@amber:~$ microk8s kubectl uncordon vg.example.cloud
+cuser@vg:~$ sudo apt update && sudo apt upgrade -y
+```
 
-cuser@amber:~$ do-release-upgrade
-cuser@amber:~$ sudo snap refresh microk8s --channel=1.31/stable
+* think about every helm-chart compatibility!
+
+* to list all channels
+```console
+cuser@amber:~$ snap info microk8s
+cuser@vg:~$ snap info microk8s
+```
+* to upgrade an multi-node cluster:
+```console
+cuser@amber:~$ microk8s kubectl drain amber.<example.cloud>  --ignore-daemonsets
+cuser@amber:~$ microk8s kubectl drain vg.<example.cloud>  --ignore-daemonsets
+cuser@amber:~$ microk8s kubectl get po -A -o wide
+cuser@amber:~$ sudo snap refresh microk8s --channel=1.32/stable
+cuser@vg:~$ sudo snap refresh microk8s --channel=1.32/stable
+cuser@amber:~$ microk8s.kubectl get no
+cuser@amber:~$ microk8s kubectl uncordon vg.<example.cloud>
+cuser@amber:~$ microk8s kubectl uncordon amber.<example.cloud>
+cuser@amber:~$ microk8s kubectl get po -A -o wide
+```
+* to revert a failed upgrade attempt:
+```console
+cuser@amber:~$ sudo snap revert microk8s
+cuser@vg:~$ sudo snap revert microk8s
+```
+
+* as helm was installed with snap it will update itself with the channel refresh, so it should be up to date:
+```console
+cuser@amber:~$ helm version
+```
+
+* to get all currenty used versions for installed charts:
+```console
+cuser@amber:~$ helm list --all-namespaces
+```
+
+```console
+cuser@amber:~$ helm repo update
+```
+
+* to list the latest possible version of metallb:
+```console
+cuser@amber:~$ helm search repo metallb/metallb
+```
+
+* to get all info including min version of kubernetes for metallb:
+```console
+cuser@amber:~$ helm show chart metallb/metallb
+```
+
+* helm upgrade charts to latest https://helm.sh/docs/helm/helm_upgrade/ 
+```console
+cuser@amber:~$ helm upgrade metallb metallb/metallb \
+--namespace metallb-system \
+--reuse-values
+
+cuser@amber:~$ helm upgrade cert-manager jetstack/cert-manager \
+--namespace cert-manager \
+--reuse-values
+
+cuser@amber:~$ helm list --all-namespaces
 ```
