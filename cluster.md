@@ -113,7 +113,8 @@ ipconfig /flushdns
 * verifying that DNS is working correctly within your Kubernetes platform: https://help.hcl-software.com/connections/v6/admin/install/cp_prereq_kubernetes_dns.html
 
 ## Configure DNS with systemd-resolved
-
+* https://kubernetes.io/docs/tasks/administer-cluster/dns-debugging-resolution/
+* we want to set our router as a dns so that we can use static entries in out router for example for git.<example.cloud>
 * check if resolv.conf is a symlink to /run/systemd/resolve/stub-resolv.conf:
 ```console
 cuser@amber:~$ ls -l /etc/resolv.conf
@@ -122,8 +123,8 @@ cuser@vg:~$ ls -l /etc/resolv.conf
 
 * change the /etc/systemd/resolved.conf for both nodes:
 $ sudo vim /etc/systemd/resolved.conf
-DNS=8.8.8.8 1.1.1.1
-FallbackDNS=8.8.4.4
+DNS=192.168.210.1
+FallbackDNS=8.8.8.8
 
 * restart to apply the configuration:
 ```console
@@ -135,6 +136,12 @@ cuser@vg:~$ sudo service systemd-resolved restart
 ```console
 cuser@amber:~$ resolvectl
 cuser@vg:~$ resolvectl
+```
+
+* check if we can resolve the IP for git.<example.cloud>
+```console
+cuser@amber:~$ dig git.xsync.cloud
+cuser@amber:~$ dig git.xsync.cloud
 ```
 
 ## Update system packages(for all nodes)
@@ -373,13 +380,15 @@ cuser@amber:~$ helm uninstall cert-manager -n cert-manager
 ```
 
 ## Install cert-manager
-* latest version is under: https://github.com/cert-manager/cert-manager/releases
+* latest compatible version with k8s is listed under: https://cert-manager.io/docs/releases/
 * you can use https://github.com/cert-manager/cert-manager/releases/latest to list the latest stable tag (here v1.11.1)
 
 ```console
 cuser@amber:~$ helm repo add jetstack https://charts.jetstack.io
 cuser@amber:~$ helm repo update
 
+
+* we need the dns01-recursive-nameservers flag because by default we have our own router as dns
 cuser@amber:~$ helm install \
 cert-manager jetstack/cert-manager \
 --namespace cert-manager \
@@ -509,13 +518,13 @@ value: r2120c32-20a2-3c7d-4f01-34fe4ttb3899.auth.acme-dns.io.
 * (what we do not delete is <example.cloud>. type A targeting the IP {replace-this-with-your-public-ip})
 * we check if it works:
 ```console
-cuser@amber:~$ dig _acme-challenge.<example.cloud>
+cuser@amber:~$ dig @8.8.8.8 _acme-challenge.<example.cloud>
 ```
 * (output containing this should come: _acme-challenge.<example.cloud>. 3600 IN    CNAME   r2120c32-20a2-3c7d-4f01-34fe4ttb3899.auth.acme-dns.io.)
 
-* if there was a problem we check with 8.8.8.8 directly:
+* (when we try dig _acme-challenge.<example.cloud> its ok, that we dont get the response, because normally the DNS 192.168.210.1 would be used):
 ```console
-cuser@amber:~$ dig @8.8.8.8 _acme-challenge.<example.cloud>
+cuser@amber:~$ dig _acme-challenge.<example.cloud>
 ```
 
 * create a new json file acme-dns-amber.json (using saved acme-dns.json) with this command(replace domain with yours):
@@ -524,7 +533,7 @@ cuser@amber:~$ dig @8.8.8.8 _acme-challenge.<example.cloud>
 cuser@amber:~$ jq -n --arg domain "<example.cloud>" --argjson acme "$(cat ~/acme-dns.json)" '.+={($domain): $acme}' > ~/acme-dns-amber.json
 ```
 
-* check if the file content is ok:
+* check if the file content is ok(check if the domain is correct => without <> parentheses):
 ```console
 cuser@amber:~$ cat acme-dns-amber.json
 {
@@ -618,6 +627,14 @@ cuser@amber:~$ kubectl get secrets -n cert-manager-<example-cloud> --watch
 cuser@amber:~$ kubectl describe secret <example>-tls-staging-12345 -n cert-manager-<example-cloud>
 ```
 ->The important part here is that both tls.crt and tls.key must be present and not empty. This may take a while until the tls.crt is present and its size is > 0 !.
+
+* if there are some problems popping out under kubectl describe clusterissuer letsencrypt-staging we can check the logs:
+```console
+cuser@amber:~$ kubectl get pods -n cert-manager
+cuser@amber:~$ kubectl logs cert-manager-12345 -n cert-manager
+```
+
+* most of the time the problem is DNS, follow https://kubernetes.io/docs/tasks/administer-cluster/dns-debugging-resolution/
 
 * **NOW THE PROD VERSION**(replaced acme server endpoint and staging by prod):
 
@@ -762,7 +779,7 @@ cuser@amber:~$ kubectl get pods -n ingress-nginx
 cuser@amber:~$ kubectl logs ingress-nginx-controller-5864d666b8-mjkw6 -n ingress-nginx
 ```
 
-* check if we have the nginx ingress class
+* check if we have the "nginx" ingress class
 ```console
 cuser@amber:~$ kubectl get ingressclass -n ingress-nginx
 ```
