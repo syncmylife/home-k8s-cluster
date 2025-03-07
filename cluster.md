@@ -1,6 +1,6 @@
 
-# Target: Kubernetes on Ubuntu LTS with microk8s using Longhorn for persistent storage. v20250112
-### [#k8s #ubuntuLTS #microk8s #helm #metallb #cert-manager #longhorn #ingress #letsencrypt #rancher #dashboard #reflector #longhorn #gitea #nextcloud #rsync #jupyterhub #lms #rabbitmq  #smartmontools #smartd #influxdb #grafana #nodered #home-assistant #docker]
+# Target: Kubernetes on Ubuntu LTS with microk8s using Ceph-Rook or Longhorn for persistent storage. v20250112
+### [#k8s #ubuntuLTS #microk8s #helm #metallb #cert-manager #ceph #rook #longhorn #ingress #letsencrypt #rancher #dashboard #reflector #longhorn #gitea #nextcloud #rsync #jupyterhub #lms #rabbitmq  #smartmontools #smartd #influxdb #grafana #nodered #home-assistant #docker]
 
 ## FAQ:
 ### Why kubernetes?
@@ -13,6 +13,8 @@
 : support for two data locations
 ### Why longhorn?
 : because there is/was no better alternative
+### Why should I (not) use Ceph-Rook?
+: because its production ready
 ### Why wildcard certificate?
 : securing both primary and subdomains with a single certificate
 ### Known limitations?
@@ -37,6 +39,14 @@
   <example.cloud> 192.168.210.200 \
   .+\.<example>\.<cloud> 192.168.210.200
 * both nodes are running Ubuntu 24.04 LTS with microk8s 1.32/stable and user cuser
+
+* for the pod networks we will use 10.1.192.0/24 for vg.<example.cloud> and 10.1.196.0/24 for amber.<example.cloud>
+* on the 192.168.101.1 router add a route with dst address 10.1.192.0/24 and gateway 192.168.101.235
+* on the 192.168.101.1 router add a route with dst address 10.1.196.0/24 and gateway 192.168.32.1
+
+* on the 192.168.210.1 router add a route with dst address 10.1.192.0/24 and gateway 192.168.32.2
+* on the 192.168.210.1 router add a route with dst address 10.1.196.0/24 and gateway 192.168.210.10
+
 
 ## Installing extra packages
 
@@ -93,22 +103,27 @@ cuser@vg:~$ sudo vim /etc/hosts
 192.168.210.10 amber.<example.cloud>
 ```
 
-* on both of the mikrotik router allow remote requests(do not forget the firewall rules forbidding port 53 TCP and UDP from WAN) this way:
+* on both of the mikrotik router allow remote requests(do not forget the firewall rules forbidding port 53 TCP and UDP from WAN)
+* add two regex static DNS entries on mikrotik(normally we would do ^(?!<subdomain>\.)[a-zA-Z0-9-]*\.?<example>\.<cloud>$ to 192.168.210.200 ..but mikrotik does not support negative lookbehind):
+, the order is important!
 ```console
-name: <example.cloud> to 192.168.210.200
-regexp: .+\.<example>\.<cloud> to 192.168.210.200
+regexp: (<subdomain>\.<example>\.<cloud>)$ pointing to 192.168.210.10 as the first regexp rule
+regexp: .*(\.<example>\.cloud)$ pointing to 192.168.210.200 as the second regexp rule in the list
 ```
+
+
+
 * flush DNS on mikrotik
 * flush DNS on ubuntu:
 ```console
 cuser@amber:~$ sudo resolvectl flush-caches
 cuser@vg:~$ sudo resolvectl flush-caches
 ```
-* flush DNS on windows PCs:
+* flush DNS on windows PCs(powershell):
 ```console
 ipconfig /flushdns
 ```
-* try cuser@amber:~$ dig <example.cloud> .. if the response contains the public IP then then DNS is not set to the router
+* try cuser@amber:~$ dig <example.cloud> .. if the response contains the public IP then then DNS is not set to the router(or the static rules are not working)
 
 * verifying that DNS is working correctly within your Kubernetes platform: https://help.hcl-software.com/connections/v6/admin/install/cp_prereq_kubernetes_dns.html
 
@@ -140,8 +155,8 @@ cuser@vg:~$ resolvectl
 
 * check if we can resolve the IP for git.<example.cloud>
 ```console
-cuser@amber:~$ dig git.xsync.cloud
-cuser@amber:~$ dig git.xsync.cloud
+cuser@amber:~$ dig git.<example.cloud>
+cuser@amber:~$ dig git.<example.cloud>
 ```
 
 ## Update system packages(for all nodes)
@@ -182,14 +197,29 @@ cuser@vg:~$ ssh 'cuser@amber.<example.cloud>'
 
 * do not forget that my firewall has a default rule to drop connections coming from 192.168.101.0 so modify this
 
-## Creating a fast storage (on each node)
-* create and mount fast storage - /mnt/ssd has to be available on all nodes(each node has to provide 700G!)
+
+## Creating a fast storage (on each node) - when using ceph-rook
+```console
+cuser@amber:~$ sudo lvcreate -n fastdata -L 700G ubuntu-vg
+cuser@amber:~$ sudo blkid /dev/ubuntu-vg/fastdata
+```
+* if blkid gives no output then find the uuid with:
+```console
+cuser@amber:~$ sudo lvs -o lv_name,lv_uuid | grep fastdata
+```
+* and find the dm-uuid-LVM.. path:
+```console
+cuser@amber:~$ ls /dev/disk/by-id
+```
+
+## Creating a fast storage (on each node) - when using longhorn
+* create and mount fast storage - /mnt/fastdata has to be available on all nodes(each node has to provide 700G!)
 
 ```console
-cuser@amber:~$ sudo lvcreate -n ssd -L 700G ubuntu-vg
-cuser@amber:~$ sudo mkfs.ext4 /dev/ubuntu-vg/ssd
-cuser@amber:~$ sudo mkdir /mnt/ssd
-cuser@amber:~$ sudo blkid /dev/ubuntu-vg/ssd
+cuser@amber:~$ sudo lvcreate -n fastdata -L 700G ubuntu-vg
+cuser@amber:~$ sudo mkfs.ext4 /dev/ubuntu-vg/fastdata
+cuser@amber:~$ sudo mkdir /mnt/fastdata
+cuser@amber:~$ sudo blkid /dev/ubuntu-vg/fastdata
 ```
 
 * if the output of blkid is empty then restart the pc and try again
@@ -201,8 +231,8 @@ cuser@amber:~$ sudo vim /etc/fstab
 * add this lines to /etc/fstab:
 
 ```console
-# /mnt/ssd
-/dev/disk/by-uuid/7db13169-52bd-4bdb-b6bc-bcc627a4afde /mnt/ssd ext4 defaults 0 1
+# /mnt/fastdata
+/dev/disk/by-uuid/7db13169-52bd-4bdb-b6bc-bcc627a4afde /mnt/fastdata ext4 defaults 0 1
 ```
 
 * save changes and remount:
@@ -211,13 +241,13 @@ cuser@amber:~$ sudo vim /etc/fstab
 cuser@amber:~$ sudo mount -a
 ```
 
-* for the vg node do the same: create and mount fast storage - /mnt/ssd has to be available on all nodes(each node has to provide 700G!)
+* for the vg node do the same: create and mount fast storage - /mnt/fastdata has to be available on all nodes(each node has to provide 700G!)
 
 ```console
-cuser@vg:~$ sudo lvcreate -n ssd -L 700G ubuntu-vg
-cuser@vg:~$ sudo mkfs.ext4 /dev/ubuntu-vg/ssd
-cuser@vg:~$ sudo mkdir /mnt/ssd
-cuser@vg:~$ sudo blkid /dev/ubuntu-vg/ssd
+cuser@vg:~$ sudo lvcreate -n fastdata -L 700G ubuntu-vg
+cuser@vg:~$ sudo mkfs.ext4 /dev/ubuntu-vg/fastdata
+cuser@vg:~$ sudo mkdir /mnt/fastdata
+cuser@vg:~$ sudo blkid /dev/ubuntu-vg/fastdata
 ```
 
 * if the output of blkid is empty then restart the pc and try again
@@ -229,8 +259,8 @@ cuser@vg:~$ sudo vim /etc/fstab
 * add this lines to /etc/fstab:
 
 ```console
-# /mnt/ssd
-/dev/disk/by-uuid/d6e7bdc3-d0e0-4c71-944e-cc6792cc6a00 /mnt/ssd ext4 defaults 0 1
+# /mnt/fastdata
+/dev/disk/by-uuid/d6e7bdc3-d0e0-4c71-944e-cc6792cc6a00 /mnt/fastdata ext4 defaults 0 1
 ```
 
 * save changes and remount:
@@ -294,7 +324,7 @@ cuser@amber:~$ sudo snap install microk8s --classic --channel=1.31/stable
 ```console
 cuser@amber:~$ microk8s add-node
 ```
-* copy the join command from the output of the add-node command, its sth. like:
+* copy the join command from the output of the add-node command, its sth. like(do not forget the --worker!!):
 ```console
 microk8s join 192.168.x.x:25000/73d4fs456452656vh6fdbv7vsda8bg52/6d7fj6456j94 --worker
 ```
@@ -360,12 +390,131 @@ cuser@amber:~$ sudo snap alias microk8s.kubectl kubectl
 	
 cuser@amber:~$ kubectl get nodes -o wide --show-labels
 cuser@amber:~$ kubectl label nodes amber.<example.cloud> kubernetes.io/role=master
-cuser@amber:~$ kubectl label nodes amber.<example.cloud> disktype=ssd
-cuser@amber:~$ kubectl label nodes vg.<example.cloud> disktype=ssd
+cuser@amber:~$ kubectl label nodes amber.<example.cloud> disktype=fastdata
+cuser@amber:~$ kubectl label nodes vg.<example.cloud> disktype=fastdata
 cuser@amber:~$ kubectl label nodes amber.<example.cloud> storagetype=fileserver
 
 cuser@amber:~$ sudo microk8s enable hostpath-storage dns
 ```
+
+* if you want to remove a label use:
+```console
+cuser@amber:~$ kubectl label node <nodename> <labelname>-
+```
+
+## Configure calico
+* the problem with wireguard site-to-site and calico is, that by default the communication between pods which are not on the same network will not work
+* we need to change the ippools to:
+```console
+cuser@amber:~$ cat <<EOF | kubectl apply -f -
+apiVersion: crd.projectcalico.org/v1
+kind: IPPool
+metadata:
+  annotations:
+  namespace: kube-system
+  name: vg-ipv4-ippool
+spec:
+  allowedUses:
+  - Workload
+  - Tunnel
+  blockSize: 26
+  cidr: 10.1.192.0/24
+  ipipMode: Never
+  natOutgoing: false
+  nodeSelector: kubernetes.io/hostname == "vg.<example.cloud>"
+  vxlanMode: Never
+EOF
+
+cuser@amber:~$ cat <<EOF | kubectl apply -f -
+apiVersion: crd.projectcalico.org/v1
+kind: IPPool
+metadata:
+  annotations:
+  namespace: kube-system
+  name: amber-ipv4-ippool
+spec:
+  allowedUses:
+  - Workload
+  - Tunnel
+  blockSize: 26
+  cidr: 10.1.196.0/24
+  ipipMode: Never
+  natOutgoing: false
+  nodeSelector: kubernetes.io/hostname == "amber.<example.cloud>"
+  vxlanMode: Never
+EOF
+```
+* after the change we need to restart the pods:
+```console
+cuser@amber:~$ kubectl delete pods -n kube-system --all
+```
+* to test the communication between pods which lay in different overlay networks we can create a test namespace:
+```console
+```
+* for easy testing we can set the test namespace as default
+```console
+cuser@amber:~$ kubectl config set-context --current --namespace=test
+```
+*  and create node specific deployments:
+```console
+cuser@amber:~$ cat <<EOF | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-test-vg
+  namespace: test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx-test
+  template:
+    metadata:
+      labels:
+        app: nginx-test
+        nginx-test: nginx-test-vg
+    spec:
+      containers:
+        - name: nginx
+          image: nginx
+      nodeSelector:
+        kubernetes.io/hostname: vg.<example.cloud>
+EOF
+```
+
+```console
+cuser@amber:~$ cat <<EOF | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: swiss-test-amber
+  namespace: test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: swiss-test
+  template:
+    metadata:
+      labels:
+        app: swiss-test
+        nginx-test: swiss-test-amber
+    spec:
+      containers:
+      - name: iperf3
+        image: leodotcloud/swiss-army-knife
+        ports:
+        - containerPort: 5201
+      nodeSelector:
+        kubernetes.io/hostname: amber.<example.cloud>
+EOF
+```
+* then we can go inside the bash of the amber pod and ping or traceroute a IP of a vg pod
+```console
+cuser@amber:~$ kubectl get pods -n test -o=custom-columns=NAME:.metadata.name,IP:status.podIP
+cuser@amber:~$ kubectl exec -it deploy/swiss-test-amber -- bash
+```
+
 ## Install helm
 * as I like to administer helm by snap and not by microk8s:
 
@@ -467,23 +616,16 @@ cuser@amber:~$ kubectl delete deployment nginx
 cuser@amber:~$ kubectl delete svc nginx
 ```
 
-* You need to make sure that the source IP address (external-ip assigned by metallb) is preserved. To achieve this, set the value of the externalTrafficPolicy field of the ingress-controller Service spec to Local. At this point is ingress not installed, so please take a look on the ingress part.
-
-```console
-cuser@amber:~$ kubectl edit svc ingress-nginx-controller -n ingress-nginx
-```
-
-* change the default value for externalTrafficPolicy field 'Cluster' to Local:
-
-```console
-externalTrafficPolicy: Local
-```
-
 * optional: install with microk8s instead of helm(disadvantage is not separating namespaces):
 ```console
 cuser@amber:~$ microk8s enable metallb:192.168.210.200-192.168.210.254
 ```
-	
+
+* to check which pods are running on a specific node:
+```console
+cuser@amber:~$ kubectl get pods --all-namespaces -o wide --field-selector spec.nodeName=vg.<example.cloud>
+```
+
 ## Install Let's Encrypt 
 * https://homekube.org/docs/cert-manager.html
 * https://cert-manager.io/docs/configuration/acme/dns01/acme-dns/
@@ -550,7 +692,7 @@ cuser@amber:~$ cat acme-dns-amber.json
 * (for multiple domains please read: https://cert-manager.io/docs/configuration/acme/dns01/acme-dns/) 
 * create a secret in the cert-manager namespace(we have this because cert-manager was already installed):
 ```console
-cuser@amber:~$ kubectl create secret generic acme-dns-amber -n cert-manager-<example-cloud> --from-file acme-dns-amber.json
+cuser@amber:~$ kubectl create secret generic acme-dns-amber -n cert-manager --from-file acme-dns-amber.json
 ```
 * wait(few minutes) until cname is propagated: dig _acme-challenge.<example.cloud>
 * (Requesting a certificate is accomplished by creating an instance of Certificate)
@@ -624,7 +766,7 @@ cuser@amber:~$ kubectl describe certificate -n cert-manager-<example-cloud>
 
 ```console
 cuser@amber:~$ kubectl get secrets -n cert-manager-<example-cloud> --watch
-cuser@amber:~$ kubectl describe secret <example>-tls-staging-12345 -n cert-manager-<example-cloud>
+cuser@amber:~$ kubectl describe secret <example>-tls-staging -n cert-manager-<example-cloud>
 ```
 ->The important part here is that both tls.crt and tls.key must be present and not empty. This may take a while until the tls.crt is present and its size is > 0 !.
 
@@ -737,7 +879,7 @@ cuser@amber:~$ helm repo add ingress-nginx https://kubernetes.github.io/ingress-
 cuser@amber:~$ helm repo update
 cuser@amber:~$ kubectl create namespace ingress-nginx
 ```
-* for next steps install reflector first(or make the changes after reflector is installed):
+* for next steps install reflector first(or make the changes after reflector is installed), do not forget that before we get a valid secret from LE reflector can run into problems affecting also k8s DNS:
 * add the ingress-nginx under secretTemplate reflector.v1.k8s.emberstack.com/reflection-allowed-namespaces
 ```console
 cuser@amber:~$ kubectl edit certificate <example>-certificate-staging -n cert-manager-<example-cloud>
@@ -784,6 +926,18 @@ cuser@amber:~$ kubectl logs ingress-nginx-controller-5864d666b8-mjkw6 -n ingress
 cuser@amber:~$ kubectl get ingressclass -n ingress-nginx
 ```
 
+* You need to make sure that the source IP address (external-ip assigned by metallb) is preserved. To achieve this, set the value of the externalTrafficPolicy field of the ingress-controller Service spec to Local.
+
+```console
+cuser@amber:~$ kubectl edit svc ingress-nginx-controller -n ingress-nginx
+```
+
+* change the default value for externalTrafficPolicy field 'Cluster' to Local:
+
+```console
+externalTrafficPolicy: Local
+```
+
 ## Install rancher
 * https://artifacthub.io/packages/helm/rancher-stable/rancher \
 * https://cert-manager.io/docs/installation/helm/#option-2-install-crds-as-part-of-the-helm-release
@@ -793,7 +947,7 @@ cuser@amber:~$ helm repo add rancher-stable https://releases.rancher.com/server-
 cuser@amber:~$ helm repo update
 
 cuser@amber:~$ helm install rancher rancher-stable/rancher \
---version 2.9.2 \
+--version 2.10.1 \
 --namespace cattle-system \
 --create-namespace \
 --set global.cattle.psp.enabled=false \
@@ -832,6 +986,20 @@ cuser@amber:~$ kubectl get pods --namespace cattle-system
 ```console
 cuser@amber:~$ kubectl -n cattle-system rollout status deploy/rancher
 ```
+
+* unistalling rancher:
+```console
+cuser@amber:~$ helm uninstall rancher -n cattle-system 
+```
+* uninstall leaves many resources, cleanup is needed according to https://ranchermanager.docs.rancher.com/getting-started/installation-and-upgrade/install-upgrade-on-a-kubernetes-cluster/rollbacks:
+```console
+cuser@amber:~$ cd /tmp
+cuser@amber:~$ git clone https://github.com/rancher/rancher-cleanup.git
+cuser@amber:~$ cd rancher-cleanup/
+cuser@amber:~$ kubectl create -f deploy/rancher-cleanup.yaml
+cuser@amber:~$ kubectl -n kube-system logs -l job-name=cleanup-job -f
+```
+
 ## Install dashboard
 ```console
 cuser@amber:~$ microk8s disable dashboard
@@ -870,9 +1038,9 @@ EOF
 ```
 
 ```console
-cuser@amber:~$ kubectl -n kube-system describe secret $(kubectl -n kube-system get secret | grep admin-user | awk '{print $1}')
+cuser@amber:~$ kubectl -n kube-system describe secret $(kubectl -n kube-system get secret | grep <example>-tls-prod | awk '{print $1}')
 ```
-* open the browser, go to dashboard, chose radio button token,
+* open the browser, go to dashboard, choose radio button token,
 * copy the token value and paste it into form then click sign in. You’ll be able to login with admin permission.
 * navigate to https://dashboard.<example.cloud>/
 
@@ -902,28 +1070,324 @@ cuser@amber:~$ kubectl edit certificate <example>-certificate-prod -n cert-manag
       reflector.v1.k8s.emberstack.com/reflection-auto-enabled: "true" # Auto create reflection for matching namespaces
       reflector.v1.k8s.emberstack.com/reflection-auto-namespaces: "cattle-system,ingress-nginx,kube-system,longhorn-system,gitea,nextcloud,jupyterhub,lms,mqtt,node-red,home-assistant,influxdb,grafana" # Control auto-reflection namespaces
 ```
+## Install Rook and Ceph
+* check for annotations:
+```console
+cuser@amber:~$ kubectl get node amber.<example.cloud> -o yaml | grep -A 10 annotations
+cuser@amber:~$ kubectl get node vg.<example.cloud> -o yaml | grep -A 10 annotations
+```
+
+* cleanup if you installed longhorn previously
+```console
+cuser@amber:~$ kubectl get storageclass
+cuser@amber:~$ kubectl patch storageclass microk8s-hostpath -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+cuser@amber:~$ kubectl delete storageclass longhorn-fast
+cuser@amber:~$ kubectl delete storageclass longhorn-static
+```
+
+```console
+cuser@amber:~$ helm repo add rook-release https://charts.rook.io/release
+cuser@amber:~$ helm repo update rook-release && helm search repo rook-release/rook-ceph -l | head -n 10
+cuser@amber:~$ helm pull rook-release/rook-ceph --version v1.16.4
+```
+* you can export the default values:
+```console
+cuser@amber:~$ helm show values rook-release/rook-ceph > values-rook-ceph.yml
+```
+
+* do not forget to sync the ingress secret with reflector
+```console
+cuser@amber:~$ kubectl edit certificate <example>-certificate-prod -n cert-manager-<example>-cloud
+```
+
+
+* now create the properties for the operator:
+```console
+cuser@amber:~$ cat <<EOF>> values-operator.yaml
+# Enable the creation of Custom Resource Definitions (CRDs)
+crds:
+  enabled: true
+
+# CSI (Container Storage Interface) configuration
+csi:
+  enableRbd: true
+  enableCephfs: true
+  enableSnapshotter: true
+  enableVolumeReplication: true
+  kubeletDirPath: "/var/snap/microk8s/common/var/lib/kubelet"
+
+# Resource requests and limits for the operator pod
+resources:
+  limits:
+    cpu: 500m
+    memory: 256Mi
+  requests:
+    cpu: 200m
+    memory: 128Mi
+
+# Annotations for the operator pod
+annotations: {}
+
+# Labels for the operator pod
+labels: {}
+
+# Node selector for scheduling the operator pod
+nodeSelector: {}
+
+# Tolerations for the operator pod
+tolerations: []
+
+# Affinity rules for the operator pod
+affinity: {}
+EOF
+```
+
+* install the operator:
+
+```console
+cuser@amber:~$ helm install rook-ceph-operator rook-release/rook-ceph \
+--create-namespace \
+--namespace rook-ceph  \
+--version v1.16.4 \
+-f values-operator.yaml
+```
+
+* check if it is running:
+```console
+cuser@amber:~$ kubectl --namespace rook-ceph get pods -l "app=rook-ceph-operator"
+```
+
+* now create the properties for the cluster:
+```console
+cuser@amber:~$ cat <<EOF>> values-cluster.yaml
+# Namespace where the Rook operator is installed
+operatorNamespace: rook-ceph
+# CephCluster Custom Resource configuration
+cephClusterSpec:
+  dataDirHostPath: /var/lib/rook
+
+  # Monitors configuration
+  mon:
+    count: 3  # Problem: With only 2 MONs, if one node goes down, the remaining MON loses quorum and the cluster becomes read-only. Solution: Run 3 MONs, but allow multiple MONs on one node.
+    allowMultiplePerNode: true
+
+  # Manager configuration
+  mgr:
+    count: 2  # Run two MGRs (one on each node)
+    allowMultiplePerNode: false
+
+  # Dashboard settings
+  dashboard:
+    urlPrefix: /
+    enabled: true
+    port: 8843
+    ssl: true
+
+  # Storage configuration
+  storage:
+    useAllNodes: false
+    useAllDevices: false
+    nodes:
+      - name: "amber.<example.cloud>"
+        devices:
+          - name: "/dev/disk/by-uuid/dm-uuid-LVM-HPWoCjg8fMcaEXfTT9ZMkwhylkFs77MCaUoqMEL6nd9e7ZqV6JOuGuG4Rjr3uNHs"
+      - name: "vg.<example.cloud>"
+        devices:
+          - name: "/dev/disk/by-uuid/dm-uuid-LVM-bY43IEUeDUcmfRu5vxGDA9hW5rHPiCCA1sTUrtbrtnp04wch4jGNtffARBxlzQgS"
+
+  # Placement settings to ensure pods are scheduled on nodes with SSDs
+  placement:
+    all:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: "disktype"
+                  operator: "In"
+                  values:
+                    - "fastdata"
+
+  # Resource requests and limits for Ceph daemons
+  resources:
+    mon:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "2000m"
+        memory: "2Gi"
+    mgr:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "2000m"
+        memory: "2Gi"
+    osd:
+      requests:
+        cpu: "1"
+        memory: "2Gi"
+      limits:
+        cpu: "4000m"
+        memory: "8Gi"
+
+# Enabling monitoring and Prometheus alerts
+monitoring:
+  enabled: true
+  createPrometheusRules: true
+
+cephFileSystem:
+  enabled: true  # Enable CephFS (shared file system)
+  name: <example>-cephfs
+  metadataPool:
+    replicated:
+      size: 2  # Replicated on 2 nodes
+  dataPools:
+    - failureDomain: "host"
+      replicated:
+        size: 2
+EOF
+```
+
+* install prometheus-operator(when monitoring enabled we need this):
+```console
+cuser@amber:~$ kubectl create namespace monitoring
+cuser@amber:~$ helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+cuser@amber:~$ helm repo update
+cuser@amber:~$ helm install prometheus-operator prometheus-community/kube-prometheus-stack -n monitoring
+```
+
+* install CephCluster:
+```console
+cuser@amber:~$ helm install rook-ceph-cluster rook-release/rook-ceph-cluster \
+--namespace rook-ceph \
+-f values-cluster.yaml
+```
+
+* install the toolbox:
+```console
+cuser@amber:~$ kubectl apply -f https://raw.githubusercontent.com/rook/rook/refs/heads/master/deploy/examples/toolbox.yaml -n rook-ceph
+cuser@amber:~$ kubectl -n rook-ceph rollout status deploy/rook-ceph-tools
+cuser@amber:~$ kubectl -n rook-ceph exec -it deploy/rook-ceph-tools -- bash
+```
+
+* test the pod communiction, the output should be: v2
+```console
+cuser@amber:~$ kubectl -n rook-ceph exec deploy/rook-ceph-operator -- curl $(kubectl -n rook-ceph get svc -l app=rook-ceph-mon -o jsonpath='{.items[0].spec.clusterIP}'):3300 2>/dev/null
+```
+
+* uninstall ceph:
+```console
+cuser@amber:~$ helm -n rook-ceph uninstall rook-ceph-cluster
+cuser@amber:~$ helm -n rook-ceph uninstall rook-ceph-operator
+cuser@amber:~$ kubectl -n rook-ceph patch cephcluster rook-ceph --type merge -p '{"spec":{"cleanupPolicy":{"confirmation":"yes-really-destroy-data"}}}'
+cuser@amber:~$ kubectl -n rook-ceph delete cephcluster rook-ceph
+cuser@amber:~$ kubectl -n rook-ceph get cephcluster
+```
+* when stuck while uninstalling look at: https://rook.io/docs/rook/latest/Storage-Configuration/ceph-teardown/#removing-the-cluster-crd-finalizer
+* updating the values yml file:
+```console
+cuser@amber:~$ helm upgrade rook-ceph-operator rook-release/rook-ceph --namespace rook-ceph -f values-operator.yaml
+cuser@amber:~$ helm upgrade rook-ceph-cluster rook-release/rook-ceph-cluster --namespace rook-ceph -f values-cluster.yaml
+```
+* for data cleanup run on all nodes:
+```console
+cuser@amber:~$ sudo rm -rf /var/lib/rook
+```
+* do not forget to wipe the storage as well - rook-ceph is persisting info about the storage used with a cluster
+
+
+* change type from ClusterIP to LoadBalancer:
+```console
+cuser@amber:~$ kubectl edit service -n rook-ceph rook-ceph-mgr-dashboard
+``` 
+
+* add ingress for ceph dashboard:
+
+```console
+cuser@amber:~$ cat <<EOF | kubectl apply -f -
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: rook-ceph-dashboard
+  namespace: rook-ceph
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: ceph-dashboard.<example.cloud>
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: rook-ceph-mgr-dashboard
+            port:
+              number: 8443
+  tls:
+  - hosts:
+    - ceph-dashboard.<example.cloud>  # Replace with your domain
+    secretName: <example>-tls-prod  # Wildcard TLS secret name
+EOF
+```
+
+* get the dashboard password(default user is admin)
+```console
+cuser@amber:~$ kubectl -n rook-ceph get secret rook-ceph-dashboard-password -o jsonpath="{['data']['password']}" | base64 --decode && echo
+```
+
+* the desired look of
+```console
+kubectl get pods -n rook-ceph
+```
+* notice, that immediatly after the install there were no exporters, osds.. it took about 30s
+```console
+csi-cephfsplugin-68stl                                        3/3     Running   0          95s
+csi-cephfsplugin-6zjjz                                        3/3     Running   0          95s
+csi-cephfsplugin-provisioner-64f7c86fdc-4dps9                 6/6     Running   0          95s
+csi-cephfsplugin-provisioner-64f7c86fdc-6bqvl                 6/6     Running   0          95s
+csi-rbdplugin-provisioner-7cc8b8c98f-6fnwz                    6/6     Running   0          95s
+csi-rbdplugin-provisioner-7cc8b8c98f-lbxgx                    6/6     Running   0          95s
+csi-rbdplugin-q6826                                           3/3     Running   0          96s
+csi-rbdplugin-xk9lt                                           3/3     Running   0          95s
+rook-ceph-crashcollector-amber.<example.cloud>-74bdbd6d48-4b4dw   1/1     Running   0          35s
+rook-ceph-crashcollector-vg.<example.cloud>-c7bf655c6-c9mfb       1/1     Running   0          34s
+rook-ceph-exporter-amber.<example.cloud>-849787f5b6-7jwr6         1/1     Running   0          35s
+rook-ceph-exporter-vg.<example.cloud>-847446c498-jkz2d            1/1     Running   0          34s
+rook-ceph-mgr-a-88d94dfcf-rtnvq                               3/3     Running   0          35s
+rook-ceph-mgr-b-fccbbd5c4-mt2tj                               3/3     Running   0          34s
+rook-ceph-mon-a-547dcd8f9f-t66pv                              2/2     Running   0          83s
+rook-ceph-mon-b-8d7dd8896-wk7z9                               2/2     Running   0          59s
+rook-ceph-mon-c-6785b76bdc-gg24f                              2/2     Running   0          47s
+rook-ceph-operator-c6875bd54-nphd4                            1/1     Running   0          2m17s
+rook-ceph-osd-prepare-amber.<example.cloud>-rh76d                 1/1     Running   0          10s
+rook-ceph-osd-prepare-vg.<example.cloud>-n4xcl                    1/1     Running   0          9s
+rook-ceph-tools-7b75b967db-n4zwg                              1/1     Running   0          60m
+```
 
 ## Install longhorn
-* we need a special path, same on every node - in this case /mnt/ssd:
+* we need a special path, same on every node - in this case /mnt/fastdata:
 ```console
-cuser@amber:~$ sudo lvcreate -n ssd -L 700G ubuntu-vg
-cuser@amber:~$ sudo mkfs.ext4 /dev/ubuntu-vg/ssd
-cuser@amber:~$ sudo mkdir /mnt/ssd
+cuser@amber:~$ sudo lvcreate -n fastdata -L 700G ubuntu-vg
+cuser@amber:~$ sudo mkfs.ext4 /dev/ubuntu-vg/fastdata
+cuser@amber:~$ sudo mkdir /mnt/fastdata
 cuser@amber:~$ sudo blkid
 cuser@amber:~$ sudo vim /etc/fstab
 ```
 
 ```console
-cuser@vg:~$ sudo lvcreate -n ssd -L 700G ubuntu-vg
-cuser@vg:~$ sudo mkfs.ext4 /dev/ubuntu-vg/ssd
-cuser@vg:~$ sudo mkdir /mnt/ssd
+cuser@vg:~$ sudo lvcreate -n fastdata -L 700G ubuntu-vg
+cuser@vg:~$ sudo mkfs.ext4 /dev/ubuntu-vg/fastdata
+cuser@vg:~$ sudo mkdir /mnt/fastdata
 cuser@vg:~$ sudo blkid
 cuser@vg:~$ sudo vim /etc/fstab
 ```
 
 * add entry to fstab:
 ```console
-/dev/disk/by-id/dm-uuid-LVM-JLKtipf6uNcwEXfTT9ZMkwhylkFs77MCl0RQqJO6PVC41rJWn6JADDmxTWyBqqQJ /mnt/ssd ext4 defaults 0 1
+/dev/disk/by-id/dm-uuid-LVM-JLKtipf6uNcwEXfTT9ZMkwhylkFs77MCl0RQqJO6PVC41rJWn6JADDmxTWyBqqQJ /mnt/fastdata ext4 defaults 0 1
 ```
 
 * take a look at https://longhorn.io/kb/troubleshooting-volume-with-multipath/
@@ -931,11 +1395,13 @@ cuser@vg:~$ sudo vim /etc/fstab
 ```console
 cuser@amber:~$ sudo apt install -y open-iscsi containerd nfs-common jq
 cuser@amber:~$ sudo systemctl enable open-iscsi
+cuser@amber:~$ sudo systemctl start iscsid
 ```
 
 ```console
 cuser@vg:~$ sudo apt install -y open-iscsi containerd nfs-common jq
 cuser@vg:~$ sudo systemctl enable open-iscsi
+cuser@vg:~$ sudo systemctl start iscsid
 ```
 
 * for master node:
@@ -962,47 +1428,48 @@ cuser@amber:~$ helm repo update
 
 * loadbalancer->ingress->svc
 ```console
-cuser@amber:~$ apt-get install open-iscsi
-cuser@amber:~$ sudo apt-get install nfs-common
-
 cuser@amber:~$ kubectl delete --all pods --namespace=longhorn-system
 ```
 	
-* check for requirements: https://longhorn.io/docs/1.7.1/deploy/install/#installation-requirements
+* check for requirements: https://longhorn.io/docs/1.7.2/deploy/install/#installation-requirements
 
 ```console
-cuser@amber:~$ curl -sSfL https://raw.githubusercontent.com/longhorn/longhorn/v1.7.1/scripts/environment_check.sh | bash
+cuser@amber:~$ kubectl create namespace longhorn-system
+cuser@amber:~$ curl -sSfL https://raw.githubusercontent.com/longhorn/longhorn/v1.7.2/scripts/environment_check.sh | bash
 
-cuser@amber:~$ kubectl apply -f https://raw.githubusercontent.com/longhorn/longhorn/v1.7.1/deploy/prerequisite/longhorn-iscsi-installation.yaml
+cuser@amber:~$ kubectl apply -f https://raw.githubusercontent.com/longhorn/longhorn/v1.7.2/deploy/prerequisite/longhorn-iscsi-installation.yaml -n longhorn-system
 cuser@amber:~$ kubectl -n longhorn-system get pod | grep longhorn-iscsi-installation
-cuser@amber:~$ kubectl apply -f https://raw.githubusercontent.com/longhorn/longhorn/v1.7.1/deploy/prerequisite/longhorn-nfs-installation.yaml
+cuser@amber:~$ kubectl -n longhorn-system logs longhorn-iscsi-installation-tzq8x -c nfs-installation
+cuser@amber:~$ kubectl apply -f https://raw.githubusercontent.com/longhorn/longhorn/v1.7.2/deploy/prerequisite/longhorn-nfs-installation.yaml -n longhorn-system
 cuser@amber:~$ kubectl -n longhorn-system get pod | grep longhorn-nfs-installation
 cuser@amber:~$ kubectl -n longhorn-system logs longhorn-nfs-installation-hz647 -c nfs-installation
-cuser@amber:~$ kubectl -n longhorn-system logs longhorn-iscsi-installation-tzq8x -c nfs-installation
 ```
 
-* how to uninstall if needed: 
+* for uninstalling please read the current documentation https://longhorn.io/docs/1.7.2/deploy/uninstall/ and do not forget to revert the storageclasses: 
 ```console
-cuser@amber:~$ kubectl delete -f https://raw.githubusercontent.com/longhorn/longhorn/v1.7.1/deploy/prerequisite/longhorn-iscsi-installation.yaml
-cuser@amber:~$ kubectl delete -f https://raw.githubusercontent.com/longhorn/longhorn/v1.7.1/deploy/prerequisite/longhorn-nfs-installation.yaml
+cuser@amber:~$ kubectl delete -f https://raw.githubusercontent.com/longhorn/longhorn/v1.7.2/deploy/prerequisite/longhorn-iscsi-installation.yaml
+cuser@amber:~$ kubectl delete -f https://raw.githubusercontent.com/longhorn/longhorn/v1.7.2/deploy/prerequisite/longhorn-nfs-installation.yaml
 ```
 
 cuser@amber:~$ helm install longhorn longhorn/longhorn \
 --namespace longhorn-system \
 --create-namespace \
---set defaultSettings.defaultDataPath="/mnt/ssd" \
+--set defaultSettings.defaultDataPath="/mnt/fastdata" \
 --set csi.kubeletRootDir=/var/snap/microk8s/common/var/lib/kubelet \
 --set persistence.defaultClassReplicaCount=2 \
---version 1.7.1
+--set service.ui.type=LoadBalancer \
+--version 1.7.2
 
 cuser@amber:~$ kubectl -n longhorn-system get pod
 ```
 * longhorn ui is default unprotected, and we want auth:
 
 ```console
+cuser@amber:~$ sudo mkdir -p /opt/longhorn
 cuser@amber:~$ cd /opt/longhorn
-cuser@amber:~$ USER=cuser; PASSWORD={replace-this-with-your-password}; echo "${USER}:$(openssl passwd -stdin -apr1 <<< ${PASSWORD})" >> auth
+cuser@amber:~$ sudo touch auth
 cuser@amber:~$ sudo chown cuser:cuser auth
+cuser@amber:~$ USER=cuser; PASSWORD={replace-this-with-your-password}; echo "${USER}:$(openssl passwd -stdin -apr1 <<< ${PASSWORD})" >> auth
 cuser@amber:~$ kubectl -n longhorn-system create secret generic basic-auth --from-file=/opt/longhorn/auth
 cuser@amber:~$ kubectl -n longhorn-system get secret basic-auth -o yaml
 ```
@@ -1063,18 +1530,21 @@ parameters:
   numberOfReplicas: "2"
   staleReplicaTimeout: "30"
   fsType: "ext4"
-  diskSelector: "ssd"
-  nodeSelector: "ssd"
+  diskSelector: "fastdata"
+  nodeSelector: "fastdata"
 EOF
 ```
 
 ```console
 cuser@amber:~$ kubectl -n longhorn-system get ingress
 ```
--> from the output we know the hostname: longhorn.<example.cloud>
+-> from the output we know the hostname: longhorn.<example.cloud> and the IP 192.168.210.200
+```console
+longhorn   nginx   longhorn.<example.cloud>   192.168.210.200   80, 443   7m1s
+```
 
 * in the UI change the storage class name to longhorn-fast
-* and under Node->Operation->Edit node and discs->add tag ssd for both disk and node
+* and under Node->Operation->Edit node and discs->add tag fastdata for both disk and node
 
 ```console
 cuser@amber:~$ kubectl patch storageclass microk8s-hostpath -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}'
