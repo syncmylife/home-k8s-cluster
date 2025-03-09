@@ -13,12 +13,12 @@
 : support for two data locations
 ### Why longhorn?
 : because there is/was no better alternative
-### Why should I (not) use Ceph-Rook?
+### Why ceph-rook?
 : because its production ready
 ### Why wildcard certificate?
 : securing both primary and subdomains with a single certificate
 ### Known limitations?
-: loadBalancer metallb only on the master node = no full redundancy
+: loadBalancer metallb only on the master node = no full redundancy, distributed storage over Internet is too slow and not really usable when nodes not on the same LAN
 
 ## Hardware
 
@@ -1071,6 +1071,8 @@ cuser@amber:~$ kubectl edit certificate <example>-certificate-prod -n cert-manag
       reflector.v1.k8s.emberstack.com/reflection-auto-namespaces: "cattle-system,ingress-nginx,kube-system,longhorn-system,gitea,nextcloud,jupyterhub,lms,mqtt,node-red,home-assistant,influxdb,grafana" # Control auto-reflection namespaces
 ```
 ## Install Rook and Ceph
+* notice: default value for osd size is 3, for this we would need 3 fastdata nodes
+
 * check for annotations:
 ```console
 cuser@amber:~$ kubectl get node amber.<example.cloud> -o yaml | grep -A 10 annotations
@@ -1099,7 +1101,6 @@ cuser@amber:~$ helm show values rook-release/rook-ceph > values-rook-ceph.yml
 ```console
 cuser@amber:~$ kubectl edit certificate <example>-certificate-prod -n cert-manager-<example>-cloud
 ```
-
 
 * now create the properties for the operator:
 ```console
@@ -1271,20 +1272,17 @@ cuser@amber:~$ kubectl -n rook-ceph rollout status deploy/rook-ceph-tools
 cuser@amber:~$ kubectl -n rook-ceph exec -it deploy/rook-ceph-tools -- bash
 ```
 
-* test the pod communiction, the output should be: v2
-```console
-cuser@amber:~$ kubectl -n rook-ceph exec deploy/rook-ceph-operator -- curl $(kubectl -n rook-ceph get svc -l app=rook-ceph-mon -o jsonpath='{.items[0].spec.clusterIP}'):3300 2>/dev/null
-```
-
 * uninstall ceph:
 ```console
 cuser@amber:~$ helm -n rook-ceph uninstall rook-ceph-cluster
 cuser@amber:~$ helm -n rook-ceph uninstall rook-ceph-operator
 cuser@amber:~$ kubectl -n rook-ceph patch cephcluster rook-ceph --type merge -p '{"spec":{"cleanupPolicy":{"confirmation":"yes-really-destroy-data"}}}'
 cuser@amber:~$ kubectl -n rook-ceph delete cephcluster rook-ceph
-cuser@amber:~$ kubectl -n rook-ceph get cephcluster
 ```
 * when stuck while uninstalling look at: https://rook.io/docs/rook/latest/Storage-Configuration/ceph-teardown/#removing-the-cluster-crd-finalizer
+```console
+cuser@amber:~$ kubectl -n rook-ceph get cephcluster
+```
 * updating the values yml file:
 ```console
 cuser@amber:~$ helm upgrade rook-ceph-operator rook-release/rook-ceph --namespace rook-ceph -f values-operator.yaml
@@ -1295,6 +1293,12 @@ cuser@amber:~$ helm upgrade rook-ceph-cluster rook-release/rook-ceph-cluster --n
 cuser@amber:~$ sudo rm -rf /var/lib/rook
 ```
 * do not forget to wipe the storage as well - rook-ceph is persisting info about the storage used with a cluster
+```console
+cuser@amber:~$ sudo blkdiscard /dev/ubuntu-vg/fastdata
+```
+```console
+cuser@vg:~$ sudo blkdiscard /dev/ubuntu-vg/fastdata
+```
 
 
 * change type from ClusterIP to LoadBalancer:
@@ -1338,33 +1342,51 @@ EOF
 cuser@amber:~$ kubectl -n rook-ceph get secret rook-ceph-dashboard-password -o jsonpath="{['data']['password']}" | base64 --decode && echo
 ```
 
-* the desired look of
+* at first we get an output of:
 ```console
-kubectl get pods -n rook-ceph
+cuser@amber:~$ kubectl get pods -n rook-ceph
+csi-cephfsplugin-7684q                          3/3     Running   0          43s
+csi-cephfsplugin-provisioner-64f7c86fdc-f729n   6/6     Running   0          43s
+csi-cephfsplugin-provisioner-64f7c86fdc-hl5g4   6/6     Running   0          43s
+csi-cephfsplugin-sfmv7                          3/3     Running   0          43s
+csi-rbdplugin-24tt4                             3/3     Running   0          43s
+csi-rbdplugin-provisioner-7cc8b8c98f-dzxzq      6/6     Running   0          43s
+csi-rbdplugin-provisioner-7cc8b8c98f-k8wfk      6/6     Running   0          43s
+csi-rbdplugin-rx4br                             3/3     Running   0          43s
+rook-ceph-mon-a-7cfb744687-drcf4                2/2     Running   0          34s
+rook-ceph-mon-b-ccccf79b8-5d8w4                 1/2     Running   0          10s
+rook-ceph-operator-c6875bd54-rs8jb              1/1     Running   0          64s
+rook-ceph-tools-7b75b967db-n4zwg                1/1     Running   0          42h
 ```
-* notice, that immediatly after the install there were no exporters, osds.. it took about 30s
+* notice, that immediatly after the install there were no exporters, osds.. it took about 30s:
 ```console
-csi-cephfsplugin-68stl                                        3/3     Running   0          95s
-csi-cephfsplugin-6zjjz                                        3/3     Running   0          95s
-csi-cephfsplugin-provisioner-64f7c86fdc-4dps9                 6/6     Running   0          95s
-csi-cephfsplugin-provisioner-64f7c86fdc-6bqvl                 6/6     Running   0          95s
-csi-rbdplugin-provisioner-7cc8b8c98f-6fnwz                    6/6     Running   0          95s
-csi-rbdplugin-provisioner-7cc8b8c98f-lbxgx                    6/6     Running   0          95s
-csi-rbdplugin-q6826                                           3/3     Running   0          96s
-csi-rbdplugin-xk9lt                                           3/3     Running   0          95s
-rook-ceph-crashcollector-amber.<example.cloud>-74bdbd6d48-4b4dw   1/1     Running   0          35s
-rook-ceph-crashcollector-vg.<example.cloud>-c7bf655c6-c9mfb       1/1     Running   0          34s
-rook-ceph-exporter-amber.<example.cloud>-849787f5b6-7jwr6         1/1     Running   0          35s
-rook-ceph-exporter-vg.<example.cloud>-847446c498-jkz2d            1/1     Running   0          34s
-rook-ceph-mgr-a-88d94dfcf-rtnvq                               3/3     Running   0          35s
-rook-ceph-mgr-b-fccbbd5c4-mt2tj                               3/3     Running   0          34s
-rook-ceph-mon-a-547dcd8f9f-t66pv                              2/2     Running   0          83s
-rook-ceph-mon-b-8d7dd8896-wk7z9                               2/2     Running   0          59s
-rook-ceph-mon-c-6785b76bdc-gg24f                              2/2     Running   0          47s
-rook-ceph-operator-c6875bd54-nphd4                            1/1     Running   0          2m17s
-rook-ceph-osd-prepare-amber.<example.cloud>-rh76d                 1/1     Running   0          10s
-rook-ceph-osd-prepare-vg.<example.cloud>-n4xcl                    1/1     Running   0          9s
-rook-ceph-tools-7b75b967db-n4zwg                              1/1     Running   0          60m
+cuser@amber:~$ kubectl get pods -n rook-ceph
+```
+```console
+csi-cephfsplugin-7684q                                        3/3     Running     3 (4h7m ago)   4h21m
+csi-cephfsplugin-provisioner-64f7c86fdc-f729n                 6/6     Running     0              4h21m
+csi-cephfsplugin-provisioner-64f7c86fdc-w5ppv                 6/6     Running     0              4h8m
+csi-cephfsplugin-sfmv7                                        3/3     Running     0              4h21m
+csi-rbdplugin-24tt4                                           3/3     Running     0              4h21m
+csi-rbdplugin-provisioner-7cc8b8c98f-5wk6x                    6/6     Running     0              5m30s
+csi-rbdplugin-provisioner-7cc8b8c98f-k8wfk                    6/6     Running     0              4h21m
+csi-rbdplugin-rx4br                                           3/3     Running     3 (4h7m ago)   4h21m
+rook-ceph-crashcollector-amber.<example.cloud>-74bdbd6d48-l6w8x   1/1     Running     0              4h19m
+rook-ceph-crashcollector-vg.<example.cloud>-5c8f7c8d86-8g86n      1/1     Running     0              4h7m
+rook-ceph-exporter-amber.<example.cloud>-849787f5b6-j95hl         1/1     Running     0              4h19m
+rook-ceph-exporter-vg.<example.cloud>-578cbdfb8d-54p5f            1/1     Running     0              17m
+rook-ceph-mds-ceph-filesystem-a-59664485bb-lj2v7              2/2     Running     0              4h19m
+rook-ceph-mds-ceph-filesystem-b-7458fd5b8-hvnwh               2/2     Running     0              4h18m
+rook-ceph-mgr-a-6bf7476b84-rtd7r                              3/3     Running     0              4h20m
+rook-ceph-mgr-b-6787c586df-kfhj8                              3/3     Running     0              4h8m
+rook-ceph-mon-a-7cfb744687-drcf4                              2/2     Running     0              4h21m
+rook-ceph-mon-b-ccccf79b8-8wj8j                               2/2     Running     0              4h8m
+rook-ceph-mon-c-56646dd559-zmrmz                              2/2     Running     0              4h20m
+rook-ceph-operator-c6875bd54-rs8jb                            1/1     Running     0              4h21m
+rook-ceph-osd-0-7d47f5546c-jtrxl                              2/2     Running     0              4h19m
+rook-ceph-osd-1-74c5bd6d4-gphg2                               2/2     Running     0              4h8m
+rook-ceph-rgw-ceph-objectstore-a-9fb47fcb-cclwp               2/2     Running     0              4h18m
+rook-ceph-tools-7b75b967db-n4zwg                              1/1     Running     0              46h
 ```
 
 ## Install longhorn
@@ -1451,6 +1473,7 @@ cuser@amber:~$ kubectl delete -f https://raw.githubusercontent.com/longhorn/long
 cuser@amber:~$ kubectl delete -f https://raw.githubusercontent.com/longhorn/longhorn/v1.7.2/deploy/prerequisite/longhorn-nfs-installation.yaml
 ```
 
+```console
 cuser@amber:~$ helm install longhorn longhorn/longhorn \
 --namespace longhorn-system \
 --create-namespace \
