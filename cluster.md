@@ -4,21 +4,21 @@
 
 ## FAQ:
 ### Why kubernetes?
-: best standard tech. solution for 2 and more nodes with distributed storage
+: best standard tech solution for 2 and more nodes with distributed storage
 ### Why Ubuntu LTS?
-: debian packaging system with LTS support
+: Debian packaging system with LTS support
 ### Why microk8s?
 : simple and on your machine
 ### Why distributed storage?
 : support for two data locations
-### Why longhorn?
+### Why Longhorn?
 : because there is/was no better alternative
-### Why ceph-rook?
-: because its production ready
+### Why Ceph-Rook?
+: because it's production-ready
 ### Why wildcard certificate?
 : securing both primary and subdomains with a single certificate
 ### Known limitations?
-: loadBalancer metallb only on the master node = no full redundancy, distributed storage over Internet is too slow and not really usable when nodes not on the same LAN
+: LoadBalancer MetalLB only on the master node = no full redundancy, distributed storage over Internet is too slow and not really usable when nodes not on the same LAN
 
 ## Hardware
 
@@ -41,11 +41,11 @@
 * both nodes are running Ubuntu 24.04 LTS with microk8s 1.32/stable and user cuser
 
 * for the pod networks we will use 10.1.192.0/24 for vg.<example.cloud> and 10.1.196.0/24 for amber.<example.cloud>
-* on the 192.168.101.1 router add a route with dst address 10.1.192.0/24 and gateway 192.168.101.235
-* on the 192.168.101.1 router add a route with dst address 10.1.196.0/24 and gateway 192.168.32.1
+* on the 192.168.101.1 router, add a route with dst address 10.1.192.0/24 and gateway 192.168.101.235
+* on the 192.168.101.1 router, add a route with dst address 10.1.196.0/24 and gateway 192.168.32.1
 
-* on the 192.168.210.1 router add a route with dst address 10.1.192.0/24 and gateway 192.168.32.2
-* on the 192.168.210.1 router add a route with dst address 10.1.196.0/24 and gateway 192.168.210.10
+* on the 192.168.210.1 router,add a route with dst address 10.1.192.0/24 and gateway 192.168.32.2
+* on the 192.168.210.1 router, add a route with dst address 10.1.196.0/24 and gateway 192.168.210.10
 
 
 ## Installing extra packages
@@ -76,7 +76,7 @@ cuser@amber:~$ sudo reboot
 cuser@amber:~$ sudo vim /etc/hosts
 ```
 
-* add this lines to /etc/hosts:
+* add these lines to /etc/hosts:
 
 ```console
 127.0.1.1 amber.<example.cloud>
@@ -104,7 +104,7 @@ cuser@vg:~$ sudo vim /etc/hosts
 ```
 
 * on both of the mikrotik router allow remote requests(do not forget the firewall rules forbidding port 53 TCP and UDP from WAN)
-* add two regex static DNS entries on mikrotik(normally we would do ^(?!<subdomain>\.)[a-zA-Z0-9-]*\.?<example>\.<cloud>$ to 192.168.210.200 ..but mikrotik does not support negative lookbehind):
+* add two regex static DNS entries on mikrotik(normally we would do ^(?!<subdomain>\.)[a-zA-Z0-9-]*\.?<example>\.<cloud>$ to 192.168.210.200 .. but mikrotik does not support negative lookbehind):
 , the order is important!
 ```console
 regexp: (<subdomain>\.<example>\.<cloud>)$ pointing to 192.168.210.10 as the first regexp rule
@@ -123,13 +123,13 @@ cuser@vg:~$ sudo resolvectl flush-caches
 ```console
 ipconfig /flushdns
 ```
-* try cuser@amber:~$ dig <example.cloud> .. if the response contains the public IP then then DNS is not set to the router(or the static rules are not working)
+* try cuser@amber:~$ dig <example.cloud> .. if the response contains the public IP then DNS is not set to the router(or the static rules are not working)
 
 * verifying that DNS is working correctly within your Kubernetes platform: https://help.hcl-software.com/connections/v6/admin/install/cp_prereq_kubernetes_dns.html
 
 ## Configure DNS with systemd-resolved
 * https://kubernetes.io/docs/tasks/administer-cluster/dns-debugging-resolution/
-* we want to set our router as a dns so that we can use static entries in out router for example for git.<example.cloud>
+* we want to set our router as a DNS so that we can use static entries in out router for example for git.<example.cloud>
 * check if resolv.conf is a symlink to /run/systemd/resolve/stub-resolv.conf:
 ```console
 cuser@amber:~$ ls -l /etc/resolv.conf
@@ -186,7 +186,7 @@ cuser@vg:~$ ssh-keygen {replace-this-with-your-passphraze}
 cuser@amber:~$ ssh-copy-id cuser@vg.<example.cloud>
 ```
 
-* provide the passphraze and test with:
+* provide the passphrase and test with:
 ```console
 cuser@amber:~$ ssh 'cuser@vg.<example.cloud>'
 ```
@@ -195,7 +195,7 @@ cuser@amber:~$ ssh 'cuser@vg.<example.cloud>'
 cuser@vg:~$ ssh 'cuser@amber.<example.cloud>'
 ```
 
-* do not forget that my firewall has a default rule to drop connections coming from 192.168.101.0 so modify this
+* do not forget that my firewall has a default rule to drop connections coming from 192.168.101.0, so modify this
 
 
 ## Creating a fast storage (on each node) - when using ceph-rook
@@ -203,7 +203,7 @@ cuser@vg:~$ ssh 'cuser@amber.<example.cloud>'
 cuser@amber:~$ sudo lvcreate -n fastdata -L 700G ubuntu-vg
 cuser@amber:~$ sudo blkid /dev/ubuntu-vg/fastdata
 ```
-* if blkid gives no output then find the uuid with:
+* if blkid gives no output, then find the UUID with:
 ```console
 cuser@amber:~$ sudo lvs -o lv_name,lv_uuid | grep fastdata
 ```
@@ -313,7 +313,7 @@ mount /dev/vgb01/lv00_main /mnt/8tb
 mount /dev/vg1/lv_data /mnt/6tb
 ```
 ## Install microk8s (if not already installed)
-* As I have installed ubuntu server with snapd (and microk8s) !I DONT need this!:
+* As I have installed ubuntu server with snapd (and microk8s) - I don't need this!:
 ```console
 cuser@amber:~$ sudo apt update
 cuser@amber:~$ sudo apt install snapd
@@ -324,7 +324,7 @@ cuser@amber:~$ sudo snap install microk8s --classic --channel=1.31/stable
 ```console
 cuser@amber:~$ microk8s add-node
 ```
-* copy the join command from the output of the add-node command, its sth. like(do not forget the --worker!!):
+* copy the join command from the output of the add-node command, its something like(do not forget the --worker!!):
 ```console
 microk8s join 192.168.x.x:25000/73d4fs456452656vh6fdbv7vsda8bg52/6d7fj6456j94 --worker
 ```
@@ -403,7 +403,7 @@ cuser@amber:~$ kubectl label node <nodename> <labelname>-
 ```
 
 ## Configure calico
-* the problem with wireguard site-to-site and calico is, that by default the communication between pods which are not on the same network will not work
+* the problem with wireguard site-to-site and calico is that, by default, the communication between pods which are not on the same network will not work
 * we need to change the ippools to:
 ```console
 cuser@amber:~$ cat <<EOF | kubectl apply -f -
@@ -448,7 +448,7 @@ EOF
 ```console
 cuser@amber:~$ kubectl delete pods -n kube-system --all
 ```
-* to test the communication between pods which lay in different overlay networks we can create a test namespace:
+* to test communication between pods that reside in different overlay networks we can create a test namespace:
 ```console
 ```
 * for easy testing we can set the test namespace as default
@@ -516,7 +516,7 @@ cuser@amber:~$ kubectl exec -it deploy/swiss-test-amber -- bash
 ```
 
 ## Install helm
-* as I like to administer helm by snap and not by microk8s:
+* as I prefer to administer helm via snap and not via microk8s:
 
 ```console
 cuser@amber:~$ sudo microk8s disable helm
@@ -664,7 +664,7 @@ cuser@amber:~$ dig @8.8.8.8 _acme-challenge.<example.cloud>
 ```
 * (output containing this should come: _acme-challenge.<example.cloud>. 3600 IN    CNAME   r2120c32-20a2-3c7d-4f01-34fe4ttb3899.auth.acme-dns.io.)
 
-* (when we try dig _acme-challenge.<example.cloud> its ok, that we dont get the response, because normally the DNS 192.168.210.1 would be used):
+* (when we try dig _acme-challenge.<example.cloud> it is okay, that we don’t get the response, because normally the DNS 192.168.210.1 would be used):
 ```console
 cuser@amber:~$ dig _acme-challenge.<example.cloud>
 ```
@@ -987,7 +987,7 @@ cuser@amber:~$ kubectl get pods --namespace cattle-system
 cuser@amber:~$ kubectl -n cattle-system rollout status deploy/rancher
 ```
 
-* unistalling rancher:
+* uninstalling rancher:
 ```console
 cuser@amber:~$ helm uninstall rancher -n cattle-system 
 ```
@@ -1040,7 +1040,7 @@ EOF
 ```console
 cuser@amber:~$ kubectl -n kube-system describe secret $(kubectl -n kube-system get secret | grep <example>-tls-prod | awk '{print $1}')
 ```
-* open the browser, go to dashboard, choose radio button token,
+* open the browser, navigate to the dashboard, choose radio button token,
 * copy the token value and paste it into form then click sign in. You’ll be able to login with admin permission.
 * navigate to https://dashboard.<example.cloud>/
 
@@ -1669,7 +1669,7 @@ if [[ $(id -u) -ne 0 ]] ; then echo "Please run as root with: sudo ./mount-files
 echo -n Please enter the cryptsetup password for sda:
 read -s password
 echo
-# Run Command
+# Run command
 echo $password | cryptsetup luksOpen /dev/disk/by-uuid/0741ff3b-9f83-4fdb-8c5d-3218fb0fabc4 crypted_sda
 lvscan
 mount /dev/vga01/lv00_main /nextcloud -o user=www-data,rw
