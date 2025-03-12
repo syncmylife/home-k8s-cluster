@@ -209,11 +209,11 @@ cuser@amber:~$ sudo lvs -o lv_name,lv_uuid | grep fastdata
 ```
 * and find the dm-uuid-LVM.. path:
 ```console
-cuser@amber:~$ ls /dev/disk/by-id
+cuser@amber:~$ ls /dev/disk/by-uuid
 ```
 
 ## Creating a fast storage (on each node) - when using longhorn
-* create and mount fast storage - /mnt/fastdata has to be available on all nodes(each node has to provide 700G!)
+* create and mount fast storage - /mnt/fastdata has to be available on all nodes(each fastdata node has to provide 700G!)
 
 ```console
 cuser@amber:~$ sudo lvcreate -n fastdata -L 700G ubuntu-vg
@@ -222,7 +222,7 @@ cuser@amber:~$ sudo mkdir /mnt/fastdata
 cuser@amber:~$ sudo blkid /dev/ubuntu-vg/fastdata
 ```
 
-* if the output of blkid is empty then restart the pc and try again
+* if the output of blkid is empty then restart the pc and try again(or maybe the FS is missing?)
 ```console
 cuser@amber:~$ 7db13169-52bd-4bdb-b6bc-bcc627a4afde
 cuser@amber:~$ sudo vim /etc/fstab
@@ -395,7 +395,10 @@ cuser@amber:~$ kubectl label nodes vg.<example.cloud> disktype=fastdata
 cuser@amber:~$ kubectl label nodes amber.<example.cloud> storagetype=fileserver
 
 cuser@amber:~$ sudo microk8s enable hostpath-storage dns
+cuser@amber:~$ sudo microk8s.kubectl config view --raw > $HOME/.kube/config
+cuser@amber:~$ export KUBECONFIG=$HOME/.kube/config
 ```
+
 
 * if you want to remove a label use:
 ```console
@@ -1412,28 +1415,9 @@ cuser@vg:~$ sudo vim /etc/fstab
 /dev/disk/by-id/dm-uuid-LVM-JLKtipf6uNcwEXfTT9ZMkwhylkFs77MCl0RQqJO6PVC41rJWn6JADDmxTWyBqqQJ /mnt/fastdata ext4 defaults 0 1
 ```
 
-* take a look at https://longhorn.io/kb/troubleshooting-volume-with-multipath/
-* for every node:
+* find the actual config
 ```console
-cuser@amber:~$ sudo apt install -y open-iscsi containerd nfs-common jq
-cuser@amber:~$ sudo systemctl enable open-iscsi
-cuser@amber:~$ sudo systemctl start iscsid
-```
-
-```console
-cuser@vg:~$ sudo apt install -y open-iscsi containerd nfs-common jq
-cuser@vg:~$ sudo systemctl enable open-iscsi
-cuser@vg:~$ sudo systemctl start iscsid
-```
-
-* for master node:
-```console
-cuser@amber:~$ ls /var/snap/microk8s
-```
-
--> the directory name with a number will differ, here it was 4055
-```console
-cuser@amber:~$ ls -la /var/snap/microk8s/4055/credentials/ | grep client.config
+cuser@amber:~$ ls -la /var/snap/microk8s/current/credentials/ | grep client.config
 ```
 
 ```console
@@ -1441,7 +1425,7 @@ cuser@amber:~$ ls -la /var/snap/microk8s/4055/credentials/ | grep client.config
 ```
 
 ```console
-cuser@amber:~$ sudo chmod g+r /var/snap/microk8s/4055/credentials/client.config
+cuser@amber:~$ sudo chmod g+r /var/snap/microk8s/current/credentials/client.config
 cuser@amber:~$ sudo shutdown -r now
 
 cuser@amber:~$ helm repo add longhorn https://charts.longhorn.io
@@ -1453,24 +1437,19 @@ cuser@amber:~$ helm repo update
 cuser@amber:~$ kubectl delete --all pods --namespace=longhorn-system
 ```
 	
-* check for requirements: https://longhorn.io/docs/1.7.2/deploy/install/#installation-requirements
-
+* download longhornctl
 ```console
-cuser@amber:~$ kubectl create namespace longhorn-system
-cuser@amber:~$ curl -sSfL https://raw.githubusercontent.com/longhorn/longhorn/v1.7.2/scripts/environment_check.sh | bash
-
-cuser@amber:~$ kubectl apply -f https://raw.githubusercontent.com/longhorn/longhorn/v1.7.2/deploy/prerequisite/longhorn-iscsi-installation.yaml -n longhorn-system
-cuser@amber:~$ kubectl -n longhorn-system get pod | grep longhorn-iscsi-installation
-cuser@amber:~$ kubectl -n longhorn-system logs longhorn-iscsi-installation-tzq8x -c nfs-installation
-cuser@amber:~$ kubectl apply -f https://raw.githubusercontent.com/longhorn/longhorn/v1.7.2/deploy/prerequisite/longhorn-nfs-installation.yaml -n longhorn-system
-cuser@amber:~$ kubectl -n longhorn-system get pod | grep longhorn-nfs-installation
-cuser@amber:~$ kubectl -n longhorn-system logs longhorn-nfs-installation-hz647 -c nfs-installation
+cuser@amber:~$ curl -sSfL -o longhornctl https://github.com/longhorn/cli/releases/download/v1.8.1/longhornctl-linux-amd64
+cuser@amber:~$ chmod +x longhornctl
+cuser@amber:~$ ./longhornctl install preflight
+cuser@amber:~$ ./longhornctl check preflight
 ```
 
-* for uninstalling please read the current documentation https://longhorn.io/docs/1.7.2/deploy/uninstall/ and do not forget to revert the storageclasses: 
+* for uninstalling please read the current documentation https://longhorn.io/docs/1.8.1/deploy/uninstall/ and do not forget to revert the storageclasses: 
 ```console
-cuser@amber:~$ kubectl delete -f https://raw.githubusercontent.com/longhorn/longhorn/v1.7.2/deploy/prerequisite/longhorn-iscsi-installation.yaml
-cuser@amber:~$ kubectl delete -f https://raw.githubusercontent.com/longhorn/longhorn/v1.7.2/deploy/prerequisite/longhorn-nfs-installation.yaml
+cuser@amber:~$ helm uninstall longhorn -n longhorn-system
+kubectl delete -f https://raw.githubusercontent.com/longhorn/longhorn/v1.8.1/deploy/longhorn.yaml
+kubectl delete -f https://raw.githubusercontent.com/longhorn/longhorn/v1.8.1/uninstall/uninstall.yaml
 ```
 
 ```console
@@ -1481,7 +1460,7 @@ cuser@amber:~$ helm install longhorn longhorn/longhorn \
 --set csi.kubeletRootDir=/var/snap/microk8s/common/var/lib/kubelet \
 --set persistence.defaultClassReplicaCount=2 \
 --set service.ui.type=LoadBalancer \
---version 1.7.2
+--version 1.8.1
 
 cuser@amber:~$ kubectl -n longhorn-system get pod
 ```
@@ -1536,6 +1515,10 @@ EOF
 ```console
 cuser@amber:~$ kubectl -n longhorn-system get ingress
 ```
+-> from the output we know the hostname: longhorn.<example.cloud> and the IP 192.168.210.200
+```console
+longhorn   nginx   longhorn.<example.cloud>   192.168.210.200   80, 443   7m1s
+```
 
 * create a new StorageClass
 
@@ -1558,16 +1541,9 @@ parameters:
 EOF
 ```
 
-```console
-cuser@amber:~$ kubectl -n longhorn-system get ingress
-```
--> from the output we know the hostname: longhorn.<example.cloud> and the IP 192.168.210.200
-```console
-longhorn   nginx   longhorn.<example.cloud>   192.168.210.200   80, 443   7m1s
-```
 
-* in the UI change the storage class name to longhorn-fast
-* and under Node->Operation->Edit node and discs->add tag fastdata for both disk and node
+* in the UI(longhorn.<example.cloud>) change the storage class name to longhorn-fast
+* and under Node->Operation->Edit node and discs->+New Node Tag fastdata and +New Disk Tag fastdata
 
 ```console
 cuser@amber:~$ kubectl patch storageclass microk8s-hostpath -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}'
@@ -1584,6 +1560,7 @@ cuser@amber:~$ kubectl get storageclass
 * Optional: (this example is working with https, ingress is not able to forward ssh ports, if needed then a new LoadBalancer is required - on port 22 with annotation: metallb.universe.tf/allow-shared-ip: "{{ ndo_context }}")
 
 ```console
+cuser@amber:~$ kubectl create namespace gitea
 cuser@amber:~$ helm repo add gitea-charts https://dl.gitea.io/charts/
 
 cuser@amber:~$ cat <<EOF | kubectl apply -f -
@@ -1627,7 +1604,9 @@ ingress:
      hosts:
        - gitea.<example.cloud>
 
-cuser@amber:~$ helm install --version 8.3.0 --namespace gitea gitea gitea-charts/gitea --values values-gitea.yml
+cuser@amber:~$ helm repo update
+cuser@amber:~$ helm search repo gitea-charts/gitea
+cuser@amber:~$ helm install --version 11.0.0 --namespace gitea gitea gitea-charts/gitea --values values-gitea.yml
 cuser@amber:~$ kubectl get pods -n gitea
 ```
 
@@ -1698,7 +1677,7 @@ ingress:
     nginx.ingress.kubernetes.io/ssl-redirect: "false"
     nginx.ingress.kubernetes.io/enable-cors: "true"
     nginx.ingress.kubernetes.io/cors-allow-headers: "X-Forwarded-For"
-	nginx.ingress.kubernetes.io/proxy-body-size: 20240m
+    nginx.ingress.kubernetes.io/proxy-body-size: 20240m
   enabled: true
   className: nginx
   path: /
@@ -1747,29 +1726,31 @@ phpClientHttpsFix:
 ```
 
 ```console
+cuser@amber:~$ helm repo update
+cuser@amber:~$ helm search repo nextcloud/nextcloud
+
 cuser@amber:~$ helm install nextcloud nextcloud/nextcloud \
---version v3.5.12  \
+--version v6.6.7  \
 --namespace nextcloud \
+--create-namespace \
 --values values-nextcloud.yml \
 --set nodeSelector.storagetype=fileserver
 
 cuser@amber:~$ watch kubectl get pods -n nextcloud
-
-cuser@amber:~$ kubectl get pods -n nextcloud
 ```
 
 * optional-check if www-data users have the same id:
 * open container shell for the pod(in this example we copied nextcloud-599dcdbc67-gbbgg)
 ```console
-cuser@amber:~$ kubectl -n nextcloud exec --stdin --tty nextcloud-599dcdbc67-gbbgg -- /bin/bash
+cuser@amber:~$ kubectl -n nextcloud exec --stdin --tty $(kubectl get pod -l app.kubernetes.io/name=nextcloud -o name -n nextcloud) -- /bin/bash
 - and inside the container run:
 $ id -u www-data
 $ id -g www-data
 
 or
 
-cuser@amber:~$ kubectl -n nextcloud exec -it nextcloud-599dcdbc67-gbbgg -- /bin/bash -c "id -u www-data"
-cuser@amber:~$ kubectl -n nextcloud exec -it nextcloud-599dcdbc67-gbbgg -- /bin/bash -c "id -g www-data"
+cuser@amber:~$ kubectl -n nextcloud exec -it $(kubectl get pod -l app.kubernetes.io/name=nextcloud -o name -n nextcloud) -- /bin/bash -c "id -u www-data"
+cuser@amber:~$ kubectl -n nextcloud exec -it $(kubectl get pod -l app.kubernetes.io/name=nextcloud -o name -n nextcloud) -- /bin/bash -c "id -g www-data"
 
 - check if user and group www-data with corresponding id exists
 $ id -u www-data
@@ -1780,10 +1761,11 @@ $ sudo groupadd -g 33 www-data
 $ sudo useradd www-data -u 33 -g 33 -m -s /bin/false
 ```
 
-* go to nextcloud.<example.cloud> and under Apps add External storage
-* go to User and Add group fileserver
-* go to User->Active users, click edit and add group fileserver, then go to Settings->Administration->External storage and add nextcloud as Local with Configuration /external-data and for fileserver group
+* navigate to nextcloud.<example.cloud> and under Apps enable External storage
+* navigate to Accounts and Add group fileserver-public
+* navigate to Accounts->All accounts, click edit and add group fileserver-public, then navigate to Administration settings->Administration->External storage and add nextcloud-public as Local with Configuration /external-data and for fileserver-public group
 
+* if the data is not visible restart:
 ```console
 cuser@amber:~$ kubectl scale deployment nextcloud --replicas=0 -n nextcloud
 cuser@amber:~$ kubectl scale deployment nextcloud --replicas=1 -n nextcloud
